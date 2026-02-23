@@ -211,6 +211,7 @@ const handleOutgoingMsg = (e) => {
   userData.message = msgInput.value.trim();
   if (!userData.message && !userData.file.data) return;
 
+  // Display user's message
   let msgContent = `<div class="message-text">${userData.message || ""}</div>`;
   if (userData.file.data) {
     msgContent += `<div class="uploaded-image"><img src="data:${userData.file.mime_type};base64,${userData.file.data}" alt="Uploaded Image"></div>`;
@@ -220,26 +221,28 @@ const handleOutgoingMsg = (e) => {
   eChatBody.appendChild(outgoingMsgDiv);
   eChatBody.scrollTo({ top: eChatBody.scrollHeight, behavior: "smooth" });
 
+  // Always display thinking bot first
+  const botContent = `
+    <img class="bot-avatar" src="/static/images/artificial-intelligence.gif" alt="">
+    <div class="message-text">
+      <div class="thinking-indicator">
+        <div class="dot"></div>
+        <div class="dot"></div>
+        <div class="dot"></div>
+      </div>
+    </div>`;
+  const incomingMsgDiv = createMsgElement(botContent, "bot-message");
+  eChatBody.appendChild(incomingMsgDiv);
+  eChatBody.scrollTo({ top: eChatBody.scrollHeight, behavior: "smooth" });
+
+  // Generate response after short delay
   setTimeout(() => {
-    const botContent = `
-      <img class="bot-avatar" src="/static/images/artificial-intelligence.gif" alt="">
-      <div class="message-text">
-        <div class="thinking-indicator">
-          <div class="dot"></div>
-          <div class="dot"></div>
-          <div class="dot"></div>
-        </div>
-      </div>`;
-    const incomingMsgDiv = createMsgElement(botContent, "bot-message");
-    eChatBody.appendChild(incomingMsgDiv);
-    eChatBody.scrollTo({ top: eChatBody.scrollHeight, behavior: "smooth" });
     generateEchatResponse(incomingMsgDiv);
   }, 500);
 
   msgInput.value = "";
   fileUploadWrapper.classList.remove("eFile-uploaded");
 };
-
 // --- Event Listeners ---
 msgInput.addEventListener("keydown", (e) => {
   if (e.key === "Enter" && msgInput.value.trim()) handleOutgoingMsg(e);
