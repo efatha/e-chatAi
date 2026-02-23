@@ -20,10 +20,19 @@ const eChatBody = document.querySelector(".chat-body");
 const eFile = document.querySelector("#e-file");
 const fileUploadWrapper = document.querySelector(".file-upload-wrapper");
 
-// API configuration
-const API_KEY = "xai-Ulm3PZfSrZ1BSIzyl4brL3obyFpAkPxWR6qG2myd9P7nB3D1Mbm83I1QO7WUHc3QUYsNsccVOll1L2kU";
-const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${API_KEY}`;
+// Now you can reference API_KEY and API_URL
+console.log("Using API URL:", API_URL);
+console.log("Using API KEY:", API_KEY);
 
+const requestOptions = {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ message: "Hello from JS" })
+};
+
+fetch(API_URL, requestOptions)
+  .then(res => res.json())
+  .then(data => console.log("Response:", data));
 // User data and chat memory
 const userData = {
   message: null,

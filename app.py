@@ -3,6 +3,12 @@ import re
 import ast
 import operator
 import os
+from dotenv import load_dotenv
+
+load_dotenv()  # loads variables from .env
+
+API_KEY = os.getenv("GEMINI_API_KEY")
+API_URL = os.getenv("API_BASE_URL")
 
 app = Flask(__name__)
 
@@ -16,7 +22,7 @@ def home():
 
 @app.route("/e-Chat")
 def chat():
-    return render_template("e-Chat.html")
+    return render_template("e-Chat.html", api_key=API_KEY, api_url=API_URL)
 
 @app.route("/login")
 def login():

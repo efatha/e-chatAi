@@ -117,5 +117,11 @@
     <script src="static/js/e-voice.js"></script>
     <script src="https://unpkg.com/@dotlottie/player-component@2.7.12/dist/dotlottie-player.mjs" type="module"></script>
     <script src="https://cdn.jsdelivr.net/npm/emoji-picker-element@^1/index.js"></script>
+    <script>
+  // Pass server-side variables to JS
+  const API_KEY = "{{ api_key }}";
+  const API_URL = "{{ api_url }}";
+</script>
+<script src="{{ url_for('static', filename='js/e-chatAi.js') }}"></script>
 </body>
 </html>
