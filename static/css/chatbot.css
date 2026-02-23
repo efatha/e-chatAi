@@ -1,0 +1,546 @@
+:root{
+    --efa-Blue: #2f8be6;
+    --efa-lightB: #2989d7;
+    --efa-darkb: #356ddc;
+    --efa-sea: #397d92;
+    --efa-purpleB-:hsl(234,100%,66%);
+    --efa-white: #fff;
+    --efa-gray: #6c757d;
+    --efa-gray-dark: #343a40;
+    --efa-gray-100: #f8f9fa;
+    --efa-gray-200: #e9ecef;
+    --efa-gray-300: #dee2e6;
+    --efa-gray-400: #ced4da;
+    --efa-gray-500: #adb5bd;
+    --efa-gray-600: #6c757d;
+    --efa-gray-700: #495057;
+    --efa-gray-800: #343a40;
+    --efa-gray-900: #212529;
+    --efa-secondary: #5382ed;
+    --efa-code-color: #4e98ac9a;
+    --efa-background: linear-gradient(to right, pink,cyan);
+    --efa-background2:  linear-gradient( rgb(72, 77, 79),var(--efa-Blue));
+}
+
+*{
+    font-family: "Inter", sans-serif;
+    padding: 0;
+    margin: 0;
+    box-sizing: border-box;
+    transition: .4s; /*this style changes smoothly the colors*/
+}
+body{
+    margin:0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    background: var(--efa-background);
+}
+.pre-header{
+    display: flex;
+    flex-direction: row;
+    justify-content: space-between;
+    background: var(--efa-gray-200);
+    padding:10px;
+    position:absolute;
+    top:0px;
+    width:100%;
+  }
+  .icon{
+    filter: saturate(270%);
+  }
+  #engage{
+    background: linear-gradient(10deg, var(--efa-gray-700),cyan);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+  .iconUser{
+    background: linear-gradient(360deg, pink,cyan);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    padding:5px;
+    display: flex;
+    align-items: center;
+  }
+  .Profile{
+    background-color: var(--efa-gray-600);
+    padding:5px;
+    margin-right: 20px;
+    color:var(--efa-gray-200);
+    border-radius: 30px;
+  }
+  .chatbot-popup{
+    width: 440px;
+    margin-top:75px;
+    position:relative;
+    overflow: hidden;
+    border-radius: 15px;
+    color:var(--efa-gray-100);
+    background:var(--efa-gray-200) ;
+    box-shadow: 0 0 128px 0 rgba(0, 0, 0, 0.1), 0 32px 64px -48px rgba(0, 0, 0, 0.5);
+}
+.chat-header{
+    display: flex;
+    align-items: center;
+    background: var(--efa-sea);
+    padding:15px 22px;
+    justify-content: space-between;
+}  
+.chat-header .header-info{
+  display: flex;
+  align-items: center;
+  gap:8px;
+}
+
+.header-info .chatbot-logo img{
+ height:40px; 
+ width:40px;
+ object-fit: cover;
+ border-radius: 50%;
+ box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+ padding: 6px;
+ flex-shrink: 0;
+ background:var(--efa-code-color);
+ border-radius: 50%;
+ width:100%;
+}
+.header-info .logo-text{
+  background: linear-gradient(to right,pink,cyan);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  font-size: 1.7rem;
+  font-weight: 700;
+}
+/* message body style */
+.chat-body{
+  padding:28px 18px;
+  display: flex;
+  flex-direction: column;
+  gap:10px;
+  overflow-y:auto ;
+  height:440px;
+  margin-bottom: 82px;
+  scrollbar-width:thin;
+  scrollbar-color: var(--efa-code-color) transparent;
+}
+.chat-body .message{
+  display: flex;
+  align-items: center;
+  gap:12px;
+}
+.chat-body .message .bot-avatar{
+  height:50px; 
+  width:50px;
+  padding: 5px;
+  align-self: flex-end;
+  margin-bottom: 5px;
+  background:var(--efa-gray-400);
+  border-radius: 50%;
+}
+.chat-body .user-message{
+  flex-direction: column;
+  align-items: flex-end;
+}
+.chat-body .user-message .message-text{
+  color: var(--efa-gray-900); /* Ensures good contrast for the text */
+  background-image: linear-gradient(45deg, cyan, pink); /* Distinct gradient background */
+  padding: 10px 15px; /* Adds internal spacing for better readability */
+  margin: 8px 0; /* Separates messages vertically */
+  max-width: 60%; /* Prevents the message bubble from stretching too wide */
+  word-wrap: break-word; /* Keeps long text within the bubble */
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1); /* Adds depth with a subtle shadow */
+  font-size: 0.95rem;
+  line-height: 1.4;
+  align-self: flex-end; /* Positions the message at the far right */
+  margin-right: 5px; /* Adds a small gap from the edge of the container */
+}
+/* Hi there message */
+.chat-body .message .message-text{
+  padding: 12px 16px;
+  max-width: 75%;
+  font-size: 0.95rem;
+  background-color: var(--efa-sea);
+  border-radius: 8px;
+  border-radius: 12px 12px 12px 2px;
+}
+.chat-body .bot .message-text{
+  border-radius: 12px 12px 2px 12px; /* Creates a chat bubble effect */
+
+}
+.chat-body .message .message-text .thinking-indicator{
+  padding: 10px 12px;
+  max-width: 100%;
+  border-radius: 8px;
+  border-radius: 12px 12px 12px 2px;
+}
+/* style the icon colors */
+.size-6 {
+  width: 40px;
+  height: 40px;
+  fill: var(--efa-sea);
+  transition: all 0.3s ease;
+}
+.size-6:hover {
+  fill: pink; /* Change color on hover */
+  transform: scale(1.2);
+}
+.echat-footer {
+  position: absolute;
+  bottom: 10px; /* Reduced space at the bottom */
+  left: 10px;
+  right: 10px; /* Ensures the input box fills the available width within the footer */
+  width: calc(100% - 20px); /* Ensure form spans full width minus padding */
+}
+.echat-footer form {
+  display: flex;
+  align-items: center;
+  background: #fff;
+  border-radius: 24px; /* Slightly smaller radius */
+  outline: 1px solid var(--efa-gray-400);
+  padding: 5px; /* Added padding inside the form for a compact design */
+  width: 100%;
+}
+.echat-footer form:focus-within {
+  outline: 2px solid var(--efa-gray-500);
+}
+form #message-input {
+  border: none;
+  outline: none;
+  height: 40px; /* Reduced height for compactness */
+  width: 100%;
+  resize: none;
+  font-size: 0.9rem; /* Slightly smaller font size */
+  padding: 10px 0 10px 14px; /* Adjusted padding for better alignment */
+  border-radius: inherit;
+  background: var(--efa-gray-100);
+}
+form .echat-controls {
+  display: flex;
+  height: 40px; /* Matches the input field height */
+  align-items: center;
+  padding-right: 4px; /* Slightly reduced padding */
+  gap: 10px; /* Adjusted gap for better spacing */
+}
+
+form .echat-controls .icon-container {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 32px;
+  width: 32px; /* Smaller icon container */
+  border-radius: 50%;
+  cursor: pointer;
+  transition: background-color 0.2s ease;
+}
+form .echat-controls .icon-container:hover {
+  background-color:none;
+   /* Subtle hover effect */
+}
+ form .echat-controls .hide-send-msg{
+  display: none;
+}
+form #message-input:valid~.echat-controls .hide-send-msg{
+  display: flex;
+}
+form .echat-controls .icon-container .send-message{
+  background-color: var(--efa-gray-400);
+  border-radius: 20% 70% 70% 20%;
+}
+form .echat-controls .icon-container .send-message:hover{
+  background-color: var(--efa-sea);
+  border-radius: 20% 80% 80% 20%;
+  padding: 2px;
+}
+.icon-container button{
+  border:none;
+  background: none;
+}
+/* thinking message */
+.chat-body .bot-message .thinking-indicator {
+  display: flex;
+  justify-content: center; /* Center the dots for symmetry */
+  gap: 6px; /* Slightly increased gap for better spacing */
+  padding-block: 15px;
+}
+
+.chat-body .bot-message .thinking-indicator .dot {
+  height: 8px; /* Slightly larger for modern feel */
+  width: 8px;
+  opacity: 0.5;
+  border-radius: 50%;
+  background: var(--efa-background);
+  animation: efatAiThinking 1.5s cubic-bezier(0.4, 0.0, 0.2, 1) infinite;
+}
+.chat-body .bot-message .thinking-indicator .dot:nth-child(1) {
+  animation-delay: 0s;
+}
+.chat-body .bot-message .thinking-indicator .dot:nth-child(2) {
+  animation-delay: 0.2s;
+}
+.chat-body .bot-message .thinking-indicator .dot:nth-child(3) {
+  animation-delay: 0.4s;
+}
+@keyframes efatAiThinking {
+  0%, 100% {
+    transform: translateY(0);
+    opacity: 0.5;
+  }
+  50% {
+    transform: translateY(-6px); /* Higher lift for a more dynamic look */
+    opacity: 1; /* Full opacity for emphasis */
+  }
+}
+/* Uploaded image container */
+.uploaded-image {
+  display: inline-block;
+  position: relative;
+  margin-top: 10px;
+  border-radius: 12px;
+  overflow: hidden;
+  max-width: 100%;
+  box-shadow: 0px 6px 12px rgba(0, 0, 0, 0.15);
+  background: #f0f0f0; /* Fallback for loading effects */
+}
+/* Uploaded image styling */
+.uploaded-image img {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: 300px; /* Allow slightly taller images for better visibility */
+  border-radius: 12px;
+  object-fit: cover;
+  transition: transform 0.3s ease, filter 0.3s ease;
+  filter: brightness(1); /* Default brightness */
+}
+/* Hover effect */
+.uploaded-image img:hover {
+  transform: scale(1.08); /* Slight zoom for interactivity */
+  filter: brightness(1.1); /* Brightens the image slightly */
+}
+/* Loading shimmer effect (optional for images still loading) */
+.uploaded-image::before {
+  content: '';
+  display: block;
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0.1) 25%, rgba(255, 255, 255, 0.2) 50%, rgba(255, 255, 255, 0.1) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+  z-index: 1;
+  opacity: 0; /* Default hidden */
+  transition: opacity 0.3s ease;
+}
+/* Show shimmer while the image is loading */
+.uploaded-image.loading::before {
+  opacity: 1;
+}
+/* Smooth shimmer animation */
+@keyframes shimmer {
+  0% {
+      background-position: -200% 0;
+  }
+  100% {
+      background-position: 200% 0;
+  }
+}
+/* The preview file-Uploaded style */
+form .file-upload-wrapper{
+  height:40px;
+  width:45px;
+  position:relative;
+}
+form .file-upload-wrapper .img{
+  position: absolute;
+  display: none;
+  width:100%;
+  height:100%;
+  object-fit: cover;
+  border-radius:50%;
+}
+/* display the uploaded file */
+form .file-upload-wrapper.eFile-uploaded .img{
+  display: block;
+}
+/* Add a subtle shadow or icon for image preview */
+.uploaded-image::after {
+  content: '\f03e'; /* Unicode for FontAwesome image icon */
+  font-family: "Font Awesome 5 Free"; /* Use FontAwesome for advanced icons */
+  font-weight: 900;
+  position: absolute;
+  bottom: 10px;
+  right: 10px;
+  font-size: 20px;
+  color: rgba(255, 255, 255, 0.8);
+  text-shadow: 0px 2px 4px rgba(0, 0, 0, 0.4);
+  z-index: 2;
+  pointer-events: none;
+}
+/* Remove icon when hovered for focus on the image */
+.uploaded-image:hover::after {
+  opacity: 0;
+  transform: scale(0.8);
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+#start-record {
+  background: none;
+  border: none;
+  font-size: 20px;
+  cursor: pointer;
+  padding: 4px;
+  margin-right: 17px;
+}
+#start-record:hover {
+  color: var(--efa-code-color);
+}
+
+.tooltip {
+  position: absolute;
+  color: var(--efa-gray-700);
+  padding: 5px 10px;
+  border-radius: 5px;
+  font-size: 12px;
+  white-space: nowrap;
+  display: none;
+}
+.custom-tooltip::after {
+  position: fixed;
+  top: 0;
+  left: 0;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.custom-tooltip:hover::after {
+  animation: tooltipMove 0.1s linear;
+}
+
+@keyframes tooltipMove {
+  0% {
+    transform: translate(-50%, -50%);
+  }
+  100% {
+    transform: translate(-50%, -80%);
+  }
+}
+.emoji-picker {
+  display: none;
+  position: absolute;
+  width: 250px; /* Square shape */
+  background: white;
+  border: 1px solid #ccc;
+  padding: 10px;
+  border-radius: 5px;
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+  max-height: 450px;
+  overflow-y: auto;
+}
+
+.emoji-picker input {
+  width: 100%;
+  padding: 10px;
+  margin-bottom: 10px;
+  border: 1px solid #ddd;
+  border-radius: 5px;
+}
+
+.emoji-grid {
+  display: grid;
+  grid-template-columns: repeat(10, 1fr); /* 10 emojis per row */
+  gap: 15px;
+  padding: 1px;
+}
+
+.emoji-item {
+  cursor: pointer;
+  font-size: 24px;
+  text-align: center;
+  padding: 5px;
+}
+
+.emoji-item:hover {
+  background: #eee;
+  border-radius: 5px;
+}
+/* Icon theme style */
+.section{
+  margin:0; 
+  display: flex;
+  justify-content: center;
+  padding-bottom:90px;
+  margin-top:-72px;
+  margin-right: 30px;
+  position: absolute;
+}
+.input{
+  visibility: hidden;
+}
+.label{
+  position: absolute;
+  width:80px;
+  height:40px;
+  background: var(--efa-code-color);
+  border-radius: 20px;
+  cursor: pointer;
+}
+
+.circle{
+  position: absolute;
+  width:34px;
+  background:var(--efa-background);
+  height: 34px;
+  top:3px;
+  left: 3px;
+  border-radius: 50%;
+  animation: toggleOff .4s linear forwards;
+}
+.circle svg{
+ width: 30px;
+ padding: 7px;
+ fill: var(--efa-sea);
+}
+
+.input:checked + .label{
+  background: none;
+  opacity: 0.3;
+} 
+.input:checked + .label:hover{
+  background:none;
+  opacity: 1;
+}
+.input:checked + .label .circle{
+  animation: toggleOn .4s linear forwards;
+  background: var(--efa-background2); /*This style changes the circle color*/
+}
+@keyframes toggleOn {
+  0%{
+      transform: translateX(0);
+  }
+  100%{
+      transform: translateX(40px);
+  }
+}
+@keyframes toggleOff {
+  0%{
+      transform: translateX(40px);
+  }
+  100%{
+      transform: translateX(0);
+  }
+}
+
+/* Responsive design */
+@media (max-width:678px) {
+ article{
+  padding: 0px;
+  margin: 15px auto;
+ }
+ .chatbot-popup{
+  max-width:360px;
+  margin-top: 100px auto;
+ }
+}

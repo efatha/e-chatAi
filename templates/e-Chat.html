@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>e-Chat model</title>
+    <meta name="description" content="e-Chat is an advanced AI chatbot developed by Efatha Rutakaza that scientists, researchers, and many more use for diving deep into research and interacting with information across various fields.">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="e-Chat">
+    <meta name="twitter:description" content="e-Chat is an advanced AI chatbot developed by Efatha Rutakaza that scientists, researchers, and many more use for diving deep into research and interacting with information across various fields.">
+    <meta name="twitter:image" content="https://efatha.github.io/e-chat/Chat/icon/artificial-intelligence.gif">
+    <meta name="twitter:site" content="@efathab">
+    <meta name="twitter:creator" content="@efatha_rutakaza">
+    <meta property="og:url" content="https://efatha.github.io/e-chat/">
+    <meta property="og:title" content="e-Chat">
+    <meta property="og:description" content="e-Chat is an advanced AI chatbot developed by Efatha Rutakaza that scientists, researchers, and many more use for diving deep into research and interacting with information across various fields.">
+    <meta property="og:image" content="https://efatha.github.io/e-chat/Chat/icon/artificial-intelligence.gif">
+    <meta property="og:image:type" content="image/gif">
+    <meta property="og:image:width" content="600">
+    <meta property="og:image:height" content="600">
+    <link rel="icon" href="static/images/artificial-intelligence.png" type="image/png">
+    <link rel="stylesheet" href="/static/css/chatbot.css">
+</head>
+
+<body>
+    <div class="pre-header">
+        <div class="username"><img src="static/images/undraw_profile.svg" width="40" alt="" class="icon"><Strong id="engage">Hello world</Strong> Happy to be in this chatbot </div>
+        <div class="Profile"><strong class="iconUser">My Profile</strong></div>
+    </div>
+    <article>
+        <!-- e-chat header -->
+        <div class="chatbot-popup">
+          <div class="chat-header">
+           <div class="header-info">
+               <nav><div class="chatbot-logo"><img src="icon/coding.gif" alt=""></div></nav>
+               
+               <h2 class="logo-text"> e-chat</h2>
+           </div>
+           <button class="material-symbols-rounded" id="close-chatbot"><dotlottie-player src="https://lottie.host/de1bb8e3-4c80-4fcc-8083-4c67f7e5d646/54tf3S0moj.lottie" background="transparent" speed="1" style="width: 40px; height: 100px; position:absolute; top:-10px; right:8px;" loop autoplay></dotlottie-player></button>
+          </div>
+       <!-- e-chat body -->
+        <div class="chat-body">
+           <div class="message bot-message">
+               <img class="bot-avatar" src="static/images/artificial-intelligence.gif" alt="">
+               <div class="message-text">Hi there 👋 <br/> How can I help you today?</div>
+           </div>
+           <div class="message user-message bot">
+            <!-- <div class="message-text">Lorem ipsum dolor sit, amet consectetur adipisicing elit. Velit distinctio eos expedita dolor culpa perspiciatis ipsa dignissimos? Fugit est rem, harum perspiciatis magni nulla molestias omnis aliquam hic aut aspernatur.</div> -->
+
+               <!--this is where the user message will be placed  -->
+          </div>
+           <div class="message bot-message thinking">
+               <!-- <img class="bot-avatar" src="/icon/artificial-intelligence.gif" alt="">
+               <div class="message-text">
+                   <div class="thinking-indicator">
+                       <div class="dot"></div>
+                       <div class="dot"></div>
+                       <div class="dot"></div>
+                   </div>
+               </div> -->
+           </div>
+           <div class="echat-footer">
+             <form action="#">
+                <textarea name="message" id="message-input" placeholder="message..." title="Welcome to e-Chat, fill this field out" class="js-tooltip" required></textarea>
+                <div class="echat-controls">
+                  <div class="icon-container">
+                    <button type="button" id="emoji-btn" title="emoji" class="js-tooltip">
+                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="size-6">
+                            <path fill-rule="evenodd" d="M12 2.25c-5.385 0-9.75 4.365-9.75 9.75s4.365 9.75 9.75 9.75 9.75-4.365 9.75-9.75S17.385 2.25 12 2.25Zm-2.625 6c-.54 0-.828.419-.936.634a1.96 1.96 0 0 0-.189.866c0 .298.059.605.189.866.108.215.395.634.936.634.54 0 .828-.419.936-.634.13-.26.189-.568.189-.866 0-.298-.059-.605-.189-.866-.108-.215-.395-.634-.936-.634Zm4.314.634c.108-.215.395-.634.936-.634.54 0 .828.419.936.634.13.26.189.568.189.866 0 .298-.059.605-.189.866-.108.215-.395.634-.936.634-.54 0-.828-.419-.936-.634a1.96 1.96 0 0 1-.189-.866c0-.298.059-.605.189-.866Zm2.023 6.828a.75.75 0 1 0-1.06-1.06 3.75 3.75 0 0 1-5.304 0 .75.75 0 0 0-1.06 1.06 5.25 5.25 0 0 0 7.424 0Z" clip-rule="evenodd" />
+                        </svg>
+                    </button>
+                    <div id="emoji-picker" class="emoji-picker">
+                        <input type="text" id="emoji-search" placeholder="Search emojis..." />
+                        <div id="emoji-grid" class="emoji-grid"></div>
+                    </div>
+                    <div class="icon-container">
+                        <button id="start-record" title="Start voice input" class="js-tooltip">
+                          🎤
+                         </button>
+                    </div>
+                </div>
+                  <div class="icon-container">
+                    <div class="file-upload-wrapper">
+                      <input type="file" accept="images/*" id="e-file" hidden>
+                      <img src="#" class="img" alt="Preview Image">
+                      <button type="button" id="e-file-upload" title="upload an Image" class="js-tooltip">
+                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="size-6">
+                          <path fill-rule="evenodd" d="M18.97 3.659a2.25 2.25 0 0 0-3.182 0l-10.94 10.94a3.75 3.75 0 1 0 5.304 5.303l7.693-7.693a.75.75 0 0 1 1.06 1.06l-7.693 7.693a5.25 5.25 0 1 1-7.424-7.424l10.939-10.94a3.75 3.75 0 1 1 5.303 5.304L9.097 18.835l-.008.008-.007.007-.002.002-.003.002A2.25 2.25 0 0 1 5.91 15.66l7.81-7.81a.75.75 0 0 1 1.061 1.06l-7.81 7.81a.75.75 0 0 0 1.054 1.068L18.97 6.84a2.25 2.25 0 0 0 0-3.182Z" clip-rule="evenodd" />
+                        </svg>
+                      </button>  
+                    </div>
+                    <section class="section">
+                      <input type="checkbox" id="dark-mode" class="input">
+                      <label for="dark-mode" class="label">
+                        <div class="circle">
+                          <svg id="themeChangerIcon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="size-6">
+                            <path fill-rule="evenodd" d="M9 4.5a.75.75 0 0 1 .721.544l.813 2.846a3.75 3.75 0 0 0 2.576 2.576l2.846.813a.75.75 0 0 1 0 1.442l-2.846.813a3.75 3.75 0 0 0-2.576 2.576l-.813 2.846a.75.75 0 0 1-1.442 0l-.813-2.846a3.75 3.75 0 0 0-2.576-2.576l-2.846-.813a.75.75 0 0 1 0-1.442l2.846-.813A3.75 3.75 0 0 0 7.466 7.89l.813-2.846A.75.75 0 0 1 9 4.5ZM18 1.5a.75.75 0 0 1 .728.568l.258 1.036c.236.94.97 1.674 1.91 1.91l1.036.258a.75.75 0 0 1 0 1.456l-1.036.258c-.94.236-1.674.97-1.91 1.91l-.258 1.036a.75.75 0 0 1-1.456 0l-.258-1.036a2.625 2.625 0 0 0-1.91-1.91l-1.036-.258a.75.75 0 0 1 0-1.456l1.036-.258a2.625 2.625 0 0 0 1.91-1.91l.258-1.036A.75.75 0 0 1 18 1.5ZM16.5 15a.75.75 0 0 1 .712.513l.394 1.183c.15.447.5.799.948.948l1.183.395a.75.75 0 0 1 0 1.422l-1.183.395c-.447.15-.799.5-.948.948l-.395 1.183a.75.75 0 0 1-1.422 0l-.395-1.183a1.5 1.5 0 0 0-.948-.948l-1.183-.395a.75.75 0 0 1 0-1.422l1.183-.395c.447-.15.799-.5.948-.948l.395-1.183A.75.75 0 0 1 16.5 15Z" clip-rule="evenodd" />
+                          </svg>
+                        </div>
+                      </label>
+                    </section>                     
+                  </div>
+                  <div class="icon-container hide-send-msg">
+                    <button type="submit"class="send-message" >
+                      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="size-6">
+                        <path d="M3.478 2.404a.75.75 0 0 0-.926.941l2.432 7.905H13.5a.75.75 0 0 1 0 1.5H4.984l-2.432 7.905a.75.75 0 0 0 .926.94 60.519 60.519 0 0 0 18.445-8.986.75.75 0 0 0 0-1.218A60.517 60.517 0 0 0 3.478 2.404Z" />
+                      </svg>
+                    </button>                       
+                  </div>
+                </div>
+            </form>
+           </div>
+        </div>
+    </article>
+    <script src="/static/js/loadPage.js"></script>
+    <script type="module" src="/static/js/e-chatAi.js"></script>
+    <script src="static/js/e-voice.js"></script>
+    <script src="https://unpkg.com/@dotlottie/player-component@2.7.12/dist/dotlottie-player.mjs" type="module"></script>
+    <script src="https://cdn.jsdelivr.net/npm/emoji-picker-element@^1/index.js"></script>
+</body>
+</html>

@@ -1,0 +1,190 @@
+
+:root{
+    --efa-Blue: #2f8be6;
+    --efa-lightB: #2989d7;
+    --efa-darkb: #356ddc;
+    --efa-sea: #397d92;
+    --efa-purpleB:hsl(234,100%,66%);
+    --efa-white: #fff;
+    --efa-gray: #6c757d;
+    --efa-gray-dark: #343a40;
+    --efa-gray-100: #f8f9fa;
+    --efa-gray-200: #e9ecef;
+    --efa-gray-300: #dee2e6;
+    --efa-gray-400: #ced4da;
+    --efa-gray-500: #adb5bd;
+    --efa-gray-600: #6c757d;
+    --efa-gray-700: #495057;
+    --efa-gray-800: #343a40;
+    --efa-gray-900: #212529;
+    --efa-secondary: #5382ed;
+    --efa-first-Backg: linear-gradient(to left, cyan, pink);
+}
+body{
+    padding:0;
+    display:flex;
+    justify-content: center;
+    margin-left:150px;
+    margin-right:150px;
+    padding-top:80px;
+    padding-bottom: 50px;
+}
+.container{
+    background-color: var(--efa-gray-300);
+    padding-right:60px;
+    padding-left:-40px;
+    padding-top:45px;
+    padding-bottom:50px;
+    border: none;
+    border-radius: 20px;
+    box-shadow: 1px 2px 2px 10px rgba(0,0,0, 0.1);
+}
+.wrapper{
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    border:1px solid var(--efa-gray-500);
+    width:500px;
+    height:250px;
+    color: var(--efa-gray-300);
+    font-size: 20px;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    font-weight: 700;
+    margin-left: 60px;
+    background-image: linear-gradient(90deg, var(--efa-gray-700), var(--efa-gray-500));
+    border-radius: 5px 5px 18px 18px;
+}
+.efatha-chat{
+    position:absolute;
+    top:110px;
+    background:linear-gradient(to left, cyan, pink);
+    -webkit-background-clip:text;
+    -webkit-text-fill-color: transparent;
+}
+input{
+    margin-left: 10px;
+    height:34px;
+    color:var(--efa-gray-600);
+    font-size: 16px;
+    font-weight: 600;
+    border:none;
+    border-radius: 2px 2px 8px 8px;
+    padding-left: 5px;
+}
+button{
+    position: relative;
+    top:55px;
+    right:-30px;
+    padding:12px;
+    border-radius: 8px;
+    border: none;
+    background: linear-gradient(90deg, cyan, pink);
+    color:var(--efa-gray-600);
+    font-family: inter;
+}
+button:hover{
+    border: none;
+    opacity: 0.7;
+    transition: all 0.2s;
+    cursor: pointer;
+}
+button:focus{
+    border:2px solid var(--efa-gray-100) ;
+    font-family: inter bold;
+    font-size: 12px;
+}
+#efa-chatMessage{
+    color:var(--efa-purpleB);
+    display: flex;
+    justify-content: center;
+    position:relative;
+    top:-150px;
+    font-weight:600;
+    font-size: x-large;
+    font-family: 'Gill Sans', 'Gill Sans MT', Calibri, 'Trebuchet MS', sans-serif;
+}
+.thanks{
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    position: absolute;
+    top:220px;
+    left:-400px;
+    background:linear-gradient(120deg, cyan, pink);
+    -webkit-background-clip:text;
+    -webkit-text-fill-color: transparent;
+  }
+.hello{
+    color:azure;
+    position: absolute;
+    top:180px;
+    left:-490px;
+  }
+#autoText{
+    color:var(--efa-gray-300);
+    position: absolute;
+    top:200px;
+    left:430px;
+    font-size: 18px;
+    font-family: Arial, Helvetica, sans-serif;
+}
+a{
+    color:var(--efa-gray-800);
+    text-decoration: none;
+    font-family: inter bold;
+    font-weight: 500;
+}
+
+  #newPage{
+    background-color: var(--efa-gray-500);
+    height:45px;
+    width:80px;
+    position: absolute;
+    top:380px;
+    right:90px;
+}
+@media (max-width:678px) {
+    #autoText{
+       left:130px;
+    }
+    .container{
+        max-width:400px;
+        max-height:230px;
+    }
+    .wrapper{
+        width:380px;
+        height:234px;
+        margin-left: 40px;
+        margin-bottom: 40px;
+
+    }
+    .efatha-chat{
+        top:100px;
+    }
+    label{
+        margin-left: 60px;
+    }
+    input{
+        margin-left: 50px;
+        width:220px;
+        margin-bottom: -10px;
+        height:34px;
+    }
+    button{
+        top:0px;
+        right:-10px;
+    }
+    .hello{
+        color:azure;
+        position: absolute;
+        top:180px;
+        left:-400px;
+      }
+    #autoText{
+        top:200px;
+        left:145px;
+        max-width: 358px;
+    }
+}  
+
