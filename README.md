@@ -27,4 +27,4 @@ Support for Advanced Research
 Multilingual Capabilities
 Extensible and Scalable
 ## Technology Stack
-Frontend: Vanilla JavaScript, HTML, CSS
+Frontend: Python, Vanilla JavaScript, HTML, CSS
