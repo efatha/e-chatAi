@@ -154,8 +154,8 @@ if (localResponse) {
   if (brainResponseText) {
     msgElement.innerText = brainResponseText;
 
-    msgElement.style.backgroundColor = "#282c34";
-    msgElement.style.color = "#00ffcc";
+    msgElement.style.backgroundColor = "#397d92";
+    msgElement.style.color = "#fff8f2";
     msgElement.style.fontFamily = "monospace";
 
     incomingMsgDiv.classList.remove("thinking");
