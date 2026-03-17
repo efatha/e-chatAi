@@ -37,3 +37,29 @@ let characterIndex = 1;
   // Start the animation
   updateText();
 });
+const sendBtn = document.getElementById("sendBtn");
+
+sendBtn.addEventListener("click", async () => {
+  const username = document.querySelector(".inpName").value;
+  const email = document.querySelector(".inpEmail").value;
+
+  if (!username) {
+    alert("Please enter your name");
+    return;
+  }
+
+  // Send to backend
+  await fetch('/get-username', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, email })
+  });
+
+  // 👉 Show loading text
+  showLoadingScreen();
+
+  // 👉 Wait before redirect (2 seconds)
+  setTimeout(() => {
+    window.location.href = "/e-Chat";
+  }, 2000);
+});

@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 load_dotenv()  # loads variables from .env
 import json
 import os
+from flask import session
 
 # Load the data.json file
 with open("data.json", "r", encoding="utf-8") as f:
@@ -21,6 +22,15 @@ API_URL = os.getenv("API_BASE_URL")
 app = Flask(__name__)
 
 # FRONTEND ROUTES
+app.secret_key = "supersecret"
+@app.route('/get-username', methods=['POST'])
+def get_username():
+    data = request.get_json()
+
+    session['username'] = data.get('username')
+    session['email'] = data.get('email')
+
+    return jsonify({"status": "saved"})
 
 @app.route("/")
 def home():
@@ -110,27 +120,50 @@ def brain():
     data = request.get_json()
     message = data.get("message", "")
 
-    # 1️⃣ Check math first
+    username = session.get("username")  # 👈 no fake default
+
+    # Helper: only sometimes include username
+    def personalize(text):
+        if username:
+            return f"{username}, {text}"
+        return text
+
+    # 1️⃣ Math
     if contains_math_operation(message):
         try:
             result = evaluate_expression(message)
-            return jsonify({"response": f"✅ Math result: {result}"})
+            return jsonify({"response": personalize(f"the result is {result}")})
         except:
-            return jsonify({"response": "⚠️ I detected math but couldn't evaluate safely.Try to type a math expression lonely without any extra text. For example: `2 + 2` or `sqrt(16)`"})
+            return jsonify({"response": personalize("I couldn't evaluate that math. Try with digits and operators only.")})
 
-    # 2️⃣ Check trained knowledge
+    # 2️⃣ Greetings (use name here 👇)
+    if any(word in message.lower() for word in ["hi", "hello", "hey"]):
+        if username:
+            return jsonify({"response": f"👋 Hello {username}! How can I help you today?"})
+        else:
+            return jsonify({"response": "👋 Hello! How can I help you today?"})
+
+    # 3️⃣ “my name” question
+    if "my name" in message.lower():
+        if username:
+            return jsonify({"response": f"😊 Your name is {username}, right?"})
+        else:
+            return jsonify({"response": "I don't know your name yet."})
+
+    # 4️⃣ Trained knowledge
     trained_response = get_trained_response(message)
     if trained_response:
-        return jsonify({"response": trained_response})
+        return jsonify({"response": personalize(trained_response)})
 
-    # 3️⃣ Check word meanings
+    # 5️⃣ Word meanings
     meaning_response = get_word_meaning(message)
     if meaning_response:
-        return jsonify({"response": meaning_response})
+        return jsonify({"response": personalize(meaning_response)})
 
-    # 4️⃣ Default fallback
-    return jsonify({"response": "🤖 I don't know yet. I'm still learning!"})
-
+    # 6️⃣ Default fallback
+    return jsonify({
+        "response": personalize("I don't know yet. I'm still learning!")
+    })
 # RUN SERVER
 
 if __name__ == "__main__":
