@@ -7,7 +7,6 @@ from dotenv import load_dotenv
 
 load_dotenv()  # loads variables from .env
 import json
-import os
 from flask import session
 
 # Load the data.json file
@@ -23,13 +22,13 @@ app = Flask(__name__)
 
 # FRONTEND ROUTES
 app.secret_key = "supersecret"
+
 @app.route('/get-username', methods=['POST'])
 def get_username():
     data = request.get_json()
-
     session['username'] = data.get('username')
     session['email'] = data.get('email')
-
+    session.modified = True
     return jsonify({"status": "saved"})
 
 @app.route("/")
@@ -80,13 +79,8 @@ def evaluate_expression(expr):
     parsed = ast.parse(expr, mode='eval')
     return eval_node(parsed.body)
 
-
-# API ROUTE (BRAIN)
 # TRAINED KNOWLEDGE & WORD MEANINGS
-import re
-
 def get_trained_response(message):
-    """Check if message matches any trained knowledge keywords."""
     msg_lower = message.lower()
     for item in TRAINED_KNOWLEDGE:
         if any(keyword in msg_lower for keyword in item.get("keywords", [])):
@@ -94,15 +88,11 @@ def get_trained_response(message):
     return None
 
 def get_word_meaning(message):
-    """Detect word queries and return meanings from WORD_MEANINGS."""
     message_lower = message.lower()
-    
-    # Regex patterns for various question forms
     patterns = [
         r"(what is|what's|define|meaning of|tell me about|do you know)\s+(\w+)",
         r"(can you tell me about|explain)\s+(\w+)"
     ]
-    
     for pattern in patterns:
         match = re.search(pattern, message_lower)
         if match:
@@ -112,21 +102,26 @@ def get_word_meaning(message):
                 return f"📖 {word.capitalize()}: {meaning}"
             else:
                 return f"🤔 Sorry, I don't know about '{word}' yet. You may teach me about it"
-    
     return None
 
+# API ROUTE (BRAIN)
 @app.route("/brain", methods=["POST"])
 def brain():
     data = request.get_json()
     message = data.get("message", "")
+    username = session.get("username")
 
-    username = session.get("username")  # 👈 no fake default
-
-    # Helper: only sometimes include username
     def personalize(text):
         if username:
             return f"{username}, {text}"
         return text
+
+    # STORE USER MESSAGE
+    if "history" not in session:
+        session["history"] = []
+
+    session["history"].append(str(message))
+    session.modified = True
 
     # 1️⃣ Math
     if contains_math_operation(message):
@@ -136,7 +131,7 @@ def brain():
         except:
             return jsonify({"response": personalize("I couldn't evaluate that math. Try with digits and operators only.")})
 
-    # 2️⃣ Greetings (use name here 👇)
+    # 2️⃣ Greetings
     if any(word in message.lower() for word in ["hi", "hello", "hey"]):
         if username:
             return jsonify({"response": f"👋 Hello {username}! How can I help you today?"})
@@ -160,12 +155,32 @@ def brain():
     if meaning_response:
         return jsonify({"response": personalize(meaning_response)})
 
-    # 6️⃣ Default fallback
-    return jsonify({
-        "response": personalize("I don't know yet. I'm still learning!")
-    })
-# RUN SERVER
+    # Memory questions (explicit)
+    if any(q in message.lower() for q in [
+        "do you remember",
+        "what did i say",
+        "repeat what i said",
+        "can you repeat"
+    ]):
+        history = session.get("history", [])
+        if len(history) > 1:
+            previous = history[:-1]  # exclude current question
+            safe_previous = [str(item) for item in previous[-3:]]  # last 3 messages
+            return jsonify({"response": personalize("I remember you said: " + ", ".join(safe_previous))})
+        else:
+            return jsonify({"response": personalize("I don't have anything to remember yet.")})
 
+    # 6️⃣ Default fallback + memory
+    history = session.get("history", [])
+    previous = history[:-1] if len(history) > 1 else []
+
+    if previous:
+        safe_previous = [str(item) for item in previous[-3:]]  # last 3 messages
+        return jsonify({"response": personalize("I remember you said: " + ", ".join(safe_previous))})
+    else:
+        return jsonify({"response": personalize("I don't know yet. I'm still learning!")})
+
+# RUN SERVER
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
