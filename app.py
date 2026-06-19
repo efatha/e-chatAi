@@ -55,8 +55,66 @@ OPERATORS = {
     ast.USub: operator.neg,
 }
 
+# Math operator keywords mapping
+MATH_OPERATORS = {
+    "sum": "+",
+    "add": "+",
+    "plus": "+",
+    "subtract": "-",
+    "minus": "-",
+    "difference": "-",
+    "multiply": "*",
+    "times": "*",
+    "product": "*",
+    "divide": "/",
+    "division": "/",
+    "divided by": "/",
+    "power": "**",
+    "to the power": "**",
+    "modulo": "%",
+    "mod": "%",
+    "remainder": "%",
+}
+
 def contains_math_operation(text):
     return bool(re.search(r'[\d+\-*/().%^]', text))
+
+def contains_math_keywords(text):
+    """Check if text contains natural language math operators"""
+    text_lower = text.lower()
+    return any(keyword in text_lower for keyword in MATH_OPERATORS.keys())
+
+def parse_natural_language_math(text):
+    """Extract operator and operands from natural language math expression"""
+    text_lower = text.lower()
+    
+    # Find which operator keyword is present (longest match first to handle "divided by" before "divide")
+    operator_keyword = None
+    operator_symbol = None
+    for keyword in sorted(MATH_OPERATORS.keys(), key=len, reverse=True):
+        if keyword in text_lower:
+            operator_keyword = keyword
+            operator_symbol = MATH_OPERATORS[keyword]
+            break
+    
+    if not operator_keyword or not operator_symbol:
+        return None
+    
+    # Extract all numbers from the text
+    numbers = re.findall(r'\d+(?:\.\d+)?', text)
+    
+    # We need at least 2 numbers
+    if len(numbers) < 2:
+        return None
+    
+    # Convert to float or int based on presence of decimal
+    num1 = float(numbers[0]) if '.' in numbers[0] else int(numbers[0])
+    num2 = float(numbers[1]) if '.' in numbers[1] else int(numbers[1])
+    
+    # Build the expression with the first two numbers
+    expression = f"{num1}{operator_symbol}{num2}"
+    
+    return expression
 
 def evaluate_expression(expr):
     expr = expr.replace("^", "**")
@@ -123,11 +181,21 @@ def brain():
     session["history"].append(str(message))
     session.modified = True
 
-    # 1️⃣ Math
+    # 1️⃣ Math - Direct expressions
     if contains_math_operation(message):
         try:
             result = evaluate_expression(message)
             return jsonify({"response": personalize(f"the result is {result}")})
+        except:
+            pass  # Try natural language math next
+    
+    # 1️⃣ Math - Natural language operators
+    if contains_math_keywords(message):
+        try:
+            math_expr = parse_natural_language_math(message)
+            if math_expr:
+                result = evaluate_expression(math_expr)
+                return jsonify({"response": personalize(f"the result is {result}")})
         except:
             return jsonify({"response": personalize("I couldn't evaluate that math. Try with digits and operators only.")})
 
