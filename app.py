@@ -18,6 +18,10 @@ WORD_MEANINGS = DATA.get("word_meanings", {})
 API_KEY = os.getenv("GEMINI_API_KEY")
 API_URL = os.getenv("API_BASE_URL")
 
+# Grok (xAI) fallback config — used server-side when Gemini is unavailable
+XAI_API_KEY = os.getenv("XAI_API_KEY")
+XAI_MODEL = os.getenv("XAI_MODEL", "grok-4.6")
+
 app = Flask(__name__)
 
 # FRONTEND ROUTES
@@ -42,6 +46,29 @@ def chat():
 @app.route("/login")
 def login():
     return render_template("login.html")
+
+# GROK (xAI) FALLBACK ROUTE — used by the frontend when the Gemini API fails
+@app.route("/grok", methods=["POST"])
+def grok():
+    if not XAI_API_KEY:
+        return jsonify({"error": "Grok API is not configured"}), 503
+
+    data = request.get_json(silent=True) or {}
+    message = data.get("message", "").strip()
+    if not message:
+        return jsonify({"error": "message is required"}), 400
+
+    try:
+        from xai_sdk import Client
+        from xai_sdk.chat import user
+
+        client = Client(api_key=XAI_API_KEY, api_host="api.x.ai")
+        chat = client.chat.create(model=XAI_MODEL)
+        chat.append(user(message))
+        response = chat.sample()
+        return jsonify({"response": response.content})
+    except Exception as e:
+        return jsonify({"error": f"Grok API failed: {e}"}), 502
 
 # SAFE MATH ENGINE
 
@@ -238,15 +265,8 @@ def brain():
         else:
             return jsonify({"response": personalize("I don't have anything to remember yet.")})
 
-    # 6️⃣ Default fallback + memory
-    history = session.get("history", [])
-    previous = history[:-1] if len(history) > 1 else []
-
-    if previous:
-        safe_previous = [str(item) for item in previous[-3:]]  # last 3 messages
-        return jsonify({"response": personalize("I remember you said: " + ", ".join(safe_previous))})
-    else:
-        return jsonify({"response": personalize("I don't know yet. I'm still learning!")})
+    # 6️⃣ Default fallback — no local match, and Gemini/Grok both failed
+    return jsonify({"response": personalize("I don't have an answer for that right now — my AI services are currently unreachable. Please try again in a moment.")})
 
 # RUN SERVER
 if __name__ == "__main__":

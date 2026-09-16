@@ -124,7 +124,50 @@ if (localResponse) {
   }
 
   // ===============================
-  // 2️⃣ THEN RUN PYTHON BRAIN
+  // 2️⃣ GROK FALLBACK IF GEMINI FAILED
+  // ===============================
+
+  if (!apiTextResponse) {
+    try {
+      const grokResponse = await fetch("/grok", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: userData.message })
+      });
+
+      const grokData = await grokResponse.json();
+      if (grokResponse.ok && grokData.response) {
+        apiTextResponse = grokData.response.trim();
+      }
+    } catch (error) {
+      console.error("Grok API Error:", error);
+    }
+  }
+
+  // ===============================
+  // 3️⃣ DECISION LOGIC — an AI (Gemini or Grok) answered, stop here, skip the brain
+  // ===============================
+
+  if (apiTextResponse) {
+    msgElement.innerText = apiTextResponse;
+
+    if (["code", "js", "html", "css", "python", "api"].some(key => msgLower.includes(key))) {
+      msgElement.style.backgroundColor = "#282c34";
+      msgElement.style.color = "#f8f8f2";
+      msgElement.style.fontFamily = "monospace";
+      msgElement.style.padding = "10px";
+      msgElement.style.borderRadius = "5px";
+    }
+
+    eChatMemory.push({ role: "model", parts: [{ text: msgElement.innerText }] });
+
+    incomingMsgDiv.classList.remove("thinking");
+    eChatBody.scrollTo({ top: eChatBody.scrollHeight, behavior: "smooth" });
+    return;
+  }
+
+  // ===============================
+  // 4️⃣ NEITHER AI ANSWERED — FALL BACK TO THE PYTHON BRAIN
   // ===============================
 
   let brainResponseText = null;
@@ -146,11 +189,6 @@ if (localResponse) {
     console.error("Python Brain Error:", error);
   }
 
-  // ===============================
-  // 3️⃣ DECISION LOGIC
-  // ===============================
-
-  // If Python brain detected math → prioritize it
   if (brainResponseText) {
     msgElement.innerText = brainResponseText;
 
@@ -163,30 +201,11 @@ if (localResponse) {
     return;
   }
 
-  // If no math but Gemini worked
-  if (apiTextResponse) {
-    msgElement.innerText = apiTextResponse;
-
-    if (["code", "js", "html", "css", "python", "api"].some(key => msgLower.includes(key))) {
-      msgElement.style.backgroundColor = "#282c34";
-      msgElement.style.color = "#f8f8f2";
-      msgElement.style.fontFamily = "monospace";
-      msgElement.style.padding = "10px";
-      msgElement.style.borderRadius = "5px";
-    }
-
-    eChatMemory.push({ role: "model", parts: [{ text: msgElement.innerText }] });
-
-    incomingMsgDiv.classList.remove("thinking");
-    eChatBody.scrollTo({ top: eChatBody.scrollHeight, behavior: "smooth" });
-    return;
-  }
-
   // ===============================
-  // 4️⃣ FALLBACK (BOTH FAILED)
+  // 5️⃣ FALLBACK (GEMINI, GROK, AND BRAIN ALL FAILED)
   // ===============================
 
-  console.error("Both e-chat and Python Brain failed.");
+  console.error("Gemini, Grok, and Python Brain all failed.");
 
   msgElement.style.color = "pink";
   msgElement.style.borderLeft = "4px solid pink";
