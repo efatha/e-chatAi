@@ -1,7 +1,4 @@
 from flask import Flask, render_template, request, jsonify
-import re
-import ast
-import operator
 import os
 from dotenv import load_dotenv
 
@@ -9,18 +6,13 @@ load_dotenv()  # loads variables from .env
 import json
 from flask import session
 
+from agents.router import answer_question, api_agent, configure
+
 # Load the data.json file
 with open("data.json", "r", encoding="utf-8") as f:
     DATA = json.load(f)
 
-TRAINED_KNOWLEDGE = DATA.get("trained_knowledge", [])
-WORD_MEANINGS = DATA.get("word_meanings", {})
-API_KEY = os.getenv("GEMINI_API_KEY")
-API_URL = os.getenv("API_BASE_URL")
-
-# Grok (xAI) fallback config — used server-side when Gemini is unavailable
-XAI_API_KEY = os.getenv("XAI_API_KEY")
-XAI_MODEL = os.getenv("XAI_MODEL", "grok-4.6")
+configure(DATA.get("trained_knowledge", []), DATA.get("word_meanings", {}))
 
 app = Flask(__name__)
 
@@ -41,232 +33,56 @@ def home():
 
 @app.route("/e-Chat")
 def chat():
-    return render_template("e-Chat.html", api_key=API_KEY, api_url=API_URL)
+    return render_template("e-Chat.html")
 
 @app.route("/login")
 def login():
     return render_template("login.html")
 
-# GROK (xAI) FALLBACK ROUTE — used by the frontend when the Gemini API fails
+def _chat_turn():
+    data = request.get_json(silent=True) or {}
+    message = str(data.get("message") or "").strip()
+    file = data.get("file") if isinstance(data.get("file"), dict) else None
+    has_file = bool(file and file.get("data"))
+    if not message and not has_file:
+        return jsonify({"error": "message is required"}), 400
+
+    if "history" not in session:
+        session["history"] = []
+    if message:
+        session["history"].append(message)
+        session.modified = True
+
+    result = answer_question(
+        message=message,
+        username=session.get("username"),
+        history=session.get("history", []),
+        file=file,
+    )
+    return jsonify(result)
+
+
+# Both routes share the two agents: local first, API when it is active.
+@app.route("/ask", methods=["POST"])
+@app.route("/brain", methods=["POST"])
+def ask():
+    return _chat_turn()
+
+
 @app.route("/grok", methods=["POST"])
 def grok():
-    if not XAI_API_KEY:
-        return jsonify({"error": "Grok API is not configured"}), 503
-
     data = request.get_json(silent=True) or {}
-    message = data.get("message", "").strip()
+    message = str(data.get("message") or "").strip()
     if not message:
         return jsonify({"error": "message is required"}), 400
 
-    try:
-        from xai_sdk import Client
-        from xai_sdk.chat import user
-
-        client = Client(api_key=XAI_API_KEY, api_host="api.x.ai")
-        chat = client.chat.create(model=XAI_MODEL)
-        chat.append(user(message))
-        response = chat.sample()
-        return jsonify({"response": response.content})
-    except Exception as e:
-        return jsonify({"error": f"Grok API failed: {e}"}), 502
-
-# SAFE MATH ENGINE
-
-OPERATORS = {
-    ast.Add: operator.add,
-    ast.Sub: operator.sub,
-    ast.Mult: operator.mul,
-    ast.Div: operator.truediv,
-    ast.Pow: operator.pow,
-    ast.Mod: operator.mod,
-    ast.USub: operator.neg,
-}
-
-# Math operator keywords mapping
-MATH_OPERATORS = {
-    "sum": "+",
-    "add": "+",
-    "plus": "+",
-    "subtract": "-",
-    "minus": "-",
-    "difference": "-",
-    "multiply": "*",
-    "times": "*",
-    "product": "*",
-    "divide": "/",
-    "division": "/",
-    "divided by": "/",
-    "power": "**",
-    "to the power": "**",
-    "modulo": "%",
-    "mod": "%",
-    "remainder": "%",
-}
-
-def contains_math_operation(text):
-    return bool(re.search(r'[\d+\-*/().%^]', text))
-
-def contains_math_keywords(text):
-    """Check if text contains natural language math operators"""
-    text_lower = text.lower()
-    return any(keyword in text_lower for keyword in MATH_OPERATORS.keys())
-
-def parse_natural_language_math(text):
-    """Extract operator and operands from natural language math expression"""
-    text_lower = text.lower()
-    
-    # Find which operator keyword is present (longest match first to handle "divided by" before "divide")
-    operator_keyword = None
-    operator_symbol = None
-    for keyword in sorted(MATH_OPERATORS.keys(), key=len, reverse=True):
-        if keyword in text_lower:
-            operator_keyword = keyword
-            operator_symbol = MATH_OPERATORS[keyword]
-            break
-    
-    if not operator_keyword or not operator_symbol:
-        return None
-    
-    # Extract all numbers from the text
-    numbers = re.findall(r'\d+(?:\.\d+)?', text)
-    
-    # We need at least 2 numbers
-    if len(numbers) < 2:
-        return None
-    
-    # Convert to float or int based on presence of decimal
-    num1 = float(numbers[0]) if '.' in numbers[0] else int(numbers[0])
-    num2 = float(numbers[1]) if '.' in numbers[1] else int(numbers[1])
-    
-    # Build the expression with the first two numbers
-    expression = f"{num1}{operator_symbol}{num2}"
-    
-    return expression
-
-def evaluate_expression(expr):
-    expr = expr.replace("^", "**")
-
-    def eval_node(node):
-        if isinstance(node, ast.Constant):
-            return node.value
-        elif isinstance(node, ast.BinOp):
-            return OPERATORS[type(node.op)](
-                eval_node(node.left),
-                eval_node(node.right)
-            )
-        elif isinstance(node, ast.UnaryOp):
-            return OPERATORS[type(node.op)](
-                eval_node(node.operand)
-            )
-        else:
-            raise ValueError("Unsupported expression")
-
-    parsed = ast.parse(expr, mode='eval')
-    return eval_node(parsed.body)
-
-# TRAINED KNOWLEDGE & WORD MEANINGS
-def get_trained_response(message):
-    msg_lower = message.lower()
-    for item in TRAINED_KNOWLEDGE:
-        if any(keyword in msg_lower for keyword in item.get("keywords", [])):
-            return item.get("response")
-    return None
-
-def get_word_meaning(message):
-    message_lower = message.lower()
-    patterns = [
-        r"(what is|what's|define|meaning of|tell me about|do you know)\s+(\w+)",
-        r"(can you tell me about|explain)\s+(\w+)"
-    ]
-    for pattern in patterns:
-        match = re.search(pattern, message_lower)
-        if match:
-            word = match.group(2)
-            meaning = WORD_MEANINGS.get(word)
-            if meaning:
-                return f"📖 {word.capitalize()}: {meaning}"
-            else:
-                return f"🤔 Sorry, I don't know about '{word}' yet. You may teach me about it"
-    return None
-
-# API ROUTE (BRAIN)
-@app.route("/brain", methods=["POST"])
-def brain():
-    data = request.get_json()
-    message = data.get("message", "")
-    username = session.get("username")
-
-    def personalize(text):
-        if username:
-            return f"{username}, {text}"
-        return text
-
-    # STORE USER MESSAGE
-    if "history" not in session:
-        session["history"] = []
-
-    session["history"].append(str(message))
-    session.modified = True
-
-    # 1️⃣ Math - Direct expressions
-    if contains_math_operation(message):
-        try:
-            result = evaluate_expression(message)
-            return jsonify({"response": personalize(f"the result is {result}")})
-        except:
-            pass  # Try natural language math next
-    
-    # 1️⃣ Math - Natural language operators
-    if contains_math_keywords(message):
-        try:
-            math_expr = parse_natural_language_math(message)
-            if math_expr:
-                result = evaluate_expression(math_expr)
-                return jsonify({"response": personalize(f"the result is {result}")})
-        except:
-            return jsonify({"response": personalize("I couldn't evaluate that math. Try with digits and operators only.")})
-
-    # 2️⃣ Greetings
-    if any(word in message.lower() for word in ["hi", "hello", "hey"]):
-        if username:
-            return jsonify({"response": f"👋 Hello {username}! How can I help you today?"})
-        else:
-            return jsonify({"response": "👋 Hello! How can I help you today?"})
-
-    # 3️⃣ “my name” question
-    if "my name" in message.lower():
-        if username:
-            return jsonify({"response": f"😊 Your name is {username}, right?"})
-        else:
-            return jsonify({"response": "I don't know your name yet."})
-
-    # 4️⃣ Trained knowledge
-    trained_response = get_trained_response(message)
-    if trained_response:
-        return jsonify({"response": personalize(trained_response)})
-
-    # 5️⃣ Word meanings
-    meaning_response = get_word_meaning(message)
-    if meaning_response:
-        return jsonify({"response": personalize(meaning_response)})
-
-    # Memory questions (explicit)
-    if any(q in message.lower() for q in [
-        "do you remember",
-        "what did i say",
-        "repeat what i said",
-        "can you repeat"
-    ]):
-        history = session.get("history", [])
-        if len(history) > 1:
-            previous = history[:-1]  # exclude current question
-            safe_previous = [str(item) for item in previous[-3:]]  # last 3 messages
-            return jsonify({"response": personalize("I remember you said: " + ", ".join(safe_previous))})
-        else:
-            return jsonify({"response": personalize("I don't have anything to remember yet.")})
-
-    # 6️⃣ Default fallback — no local match, and Gemini/Grok both failed
-    return jsonify({"response": personalize("I don't have an answer for that right now — my AI services are currently unreachable. Please try again in a moment.")})
+    agent = api_agent()
+    if not agent.has_grok():
+        return jsonify({"error": "Grok API is not configured"}), 503
+    result = agent.grok_only(message)
+    if not result:
+        return jsonify({"error": "Grok API failed"}), 502
+    return jsonify(result)
 
 # RUN SERVER
 if __name__ == "__main__":
