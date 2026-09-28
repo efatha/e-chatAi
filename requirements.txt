@@ -1,6 +1,7 @@
 Flask==3.0.0
 gunicorn==21.2.0
 sympy==1.12          # extra math support
-requests==2.32.0     # if you call external APIs
+requests==2.32.0     # dictionary API and Ollama
+wikipedia-api==0.16.0 # Wikipedia summaries for topic lookups
 python-dotenv==1.0.0 # for environment variables like GEMINI_API_KEY
 flask-cors==4.0.0    # if frontend is hosted separately

@@ -1,7 +1,8 @@
-"""Chooses the independent agent, then the API agent when that API is active."""
+"""Chooses a local answer, then dictionary/Wikipedia/Ollama, then an external API."""
 
 from agents.api_agent import ApiAgent
 from agents.independent_agent import IndependentAgent
+from agents.knowledge_agent import lookup_answer, ollama_answer
 
 _api_agent = None
 _independent_agent = None
@@ -19,9 +20,10 @@ def api_agent():
 
 def answer_question(message, username=None, history=None, file=None):
     """
-    Confident local answers stay on this machine.
-    Anything else is retrieved from the API when Gemini or Grok responds.
-    If the API is not active, the independent agent answers on its own.
+    Math, greetings, and trained facts stay local.
+    A word or topic lookup uses the dictionary and Wikipedia, and Ollama
+    when that local model is running. Flask returns those pieces together.
+    Other questions use Ollama if it is active, otherwise Gemini or Grok.
     """
     independent = _independent_agent
     api = api_agent()
@@ -33,6 +35,18 @@ def answer_question(message, username=None, history=None, file=None):
         local = independent.confident_answer(text, username, history)
         if local:
             return {"response": local, "source": "independent", "provider": "local"}
+
+    if text and not has_file:
+        meanings = independent.word_meanings if independent is not None else {}
+        knowledge = lookup_answer(text, meanings)
+        if knowledge:
+            knowledge["response"] = _with_name(knowledge["response"], username)
+            return knowledge
+
+        local_model = ollama_answer(text)
+        if local_model:
+            local_model["response"] = _with_name(local_model["response"], username)
+            return local_model
 
     prompt = text or "Describe this image."
     api_result = api.retrieve(prompt, history, file if has_file else None)
@@ -52,3 +66,9 @@ def answer_question(message, username=None, history=None, file=None):
     if independent is not None:
         fallback = independent.fallback(text, username, history)
     return {"response": fallback, "source": "independent", "provider": "local"}
+
+
+def _with_name(text, username):
+    if username and text:
+        return f"{username}, {text}"
+    return text

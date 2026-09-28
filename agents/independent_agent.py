@@ -154,10 +154,6 @@ class IndependentAgent:
             if any(keyword in lowered for keyword in item.get("keywords", [])):
                 return _personalize(item.get("response"), username)
 
-        meaning, found = _lookup_word(text, self.word_meanings)
-        if found:
-            return _personalize(meaning, username)
-
         if any(q in lowered for q in (
             "do you remember",
             "what did i say",
