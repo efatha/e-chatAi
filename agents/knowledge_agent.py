@@ -125,7 +125,7 @@ def dictionary_entry(term):
         return None
 
 
-def wikipedia_summary(term):
+def wikipedia_summary(term, question=""):
     try:
         import wikipediaapi
     except ImportError:
@@ -140,21 +140,42 @@ def wikipedia_summary(term):
             max_retries=0,
             timeout=8,
         )
-        page = wiki.page(term)
-        if not page.exists():
+        page = _page_in_sense(wiki, term, question)
+        if page is None:
             return None
-        summary = (page.summary or "").strip()
+        summary = _trim((page.summary or "").strip(), 700)
         if not summary:
             return None
-        summary = _trim(summary, 700)
-        titles = [section.title for section in page.sections[:3] if section.title]
-        lines = [f"Wikipedia — {page.title}", summary]
-        if titles:
-            lines.append("Sections: " + ", ".join(titles))
-        return "\n".join(lines)
+        return f"Wikipedia — {page.title}\n{summary}"
     except Exception as exc:
         logger.warning("Wikipedia request failed: %s", type(exc).__name__)
         return None
+
+
+def _page_in_sense(wiki, term, question):
+    """Prefer the sense the question is comparing, not a disambiguation or a place."""
+    primary = wiki.page(term)
+    if not primary.exists():
+        primary = None
+    if primary is not None and not _wrong_sense(primary.summary or "", question):
+        return primary
+    titled = term[:1].upper() + term[1:]
+    for suffix in ("programming language", "software"):
+        alt = wiki.page(f"{titled} ({suffix})")
+        if alt.exists() and (alt.summary or "").strip():
+            return alt
+    return primary
+
+
+def _wrong_sense(summary, question):
+    head = (summary or "")[:240].lower()
+    question = (question or "").lower()
+    if "may refer to" in head or "disambiguation" in head:
+        return True
+    off = ("island", "snake", "genus", "species", "river", "mountain", "album", "film")
+    if any(word in head for word in off) and not any(word in question for word in off):
+        return True
+    return False
 
 
 def ollama_is_active():

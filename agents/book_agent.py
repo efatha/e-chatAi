@@ -86,6 +86,12 @@ class BookAgent:
         chosen.sort(key=lambda item: item[0], reverse=True)
         return [(title, page, snippet) for _score, title, page, snippet in chosen[:2]]
 
+    def excerpts(self, message):
+        lines = []
+        for title, page, snippet in self._from_each_book(message):
+            lines.append(f"• {title}, p. {page}: {snippet}")
+        return lines
+
 
 def _read_pdf(path):
     try:

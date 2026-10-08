@@ -4,6 +4,8 @@ from agents.api_agent import ApiAgent
 from agents.independent_agent import IndependentAgent
 from agents.book_agent import BookAgent, looks_like_reasoning
 from agents.knowledge_agent import lookup_answer, ollama_answer
+from agents.knowledge_agent import wikipedia_summary
+from agents.reasoning_patterns import concept_terms, pattern_answer
 
 _api_agent = None
 _independent_agent = None
@@ -45,6 +47,16 @@ def answer_question(message, username=None, history=None, file=None):
         local = independent.confident_answer(text, username, history)
         if local:
             return {"response": local, "source": "independent", "provider": "local"}
+
+    if text and not has_file:
+        terms = concept_terms(text)
+        if terms is not None:
+            notes = {term: wikipedia_summary(term, text) for term in terms[:2]}
+            excerpts = book_agent().excerpts(text) if terms or looks_like_reasoning(text) else []
+            patterned = pattern_answer(text, notes, excerpts)
+            if patterned:
+                patterned["response"] = _with_name(patterned["response"], username)
+                return patterned
 
     if text and not has_file and looks_like_reasoning(text):
         from_books = book_agent().answer(text)
