@@ -96,6 +96,46 @@ def _spoken_arithmetic(text):
         lowered,
     ).strip(" ?.")
 
+    percent = re.search(
+        r"(\d+(?:\.\d+)?)\s*(?:%|percent)\s+of\s+(\d+(?:\.\d+)?)",
+        lowered,
+    )
+    if percent:
+        rate, whole = percent.group(1), percent.group(2)
+        return f"({rate}/100)*({whole})", f"{rate}% of {whole}"
+
+    scaled = re.search(
+        r"multiplied by\s+(\d+(?:\.\d+)?)\s+(?:and\s+)?(?:becomes|is|equals)\s+(\d+(?:\.\d+)?)",
+        lowered,
+    )
+    if scaled:
+        factor, total = scaled.group(1), scaled.group(2)
+        return f"({total})/({factor})", f"n × {factor} = {total}, so n = {total}/{factor}"
+
+    divided = re.search(
+        r"divided by\s+(\d+(?:\.\d+)?)\s+(?:and\s+)?(?:becomes|is|equals)\s+(\d+(?:\.\d+)?)",
+        lowered,
+    )
+    if divided:
+        factor, total = divided.group(1), divided.group(2)
+        return f"({total})*({factor})", f"n / {factor} = {total}, so n = {total} × {factor}"
+
+    increased = re.search(
+        r"(?:increased|added) by\s+(\d+(?:\.\d+)?)\s+(?:and\s+)?(?:becomes|is|equals)\s+(\d+(?:\.\d+)?)",
+        lowered,
+    )
+    if increased:
+        amount, total = increased.group(1), increased.group(2)
+        return f"({total})-({amount})", f"n + {amount} = {total}, so n = {total} - {amount}"
+
+    decreased = re.search(
+        r"(?:decreased|subtracted|reduced) by\s+(\d+(?:\.\d+)?)\s+(?:and\s+)?(?:becomes|is|equals)\s+(\d+(?:\.\d+)?)",
+        lowered,
+    )
+    if decreased:
+        amount, total = decreased.group(1), decreased.group(2)
+        return f"({total})+({amount})", f"n - {amount} = {total}, so n = {total} + {amount}"
+
     split_half = re.fullmatch(
         r"(?:the\s+)?half of\s+(\d+(?:\.\d+)?)\s*,\s*(?:plus|\+|and)\s+(\d+(?:\.\d+)?)",
         lowered,
@@ -123,6 +163,15 @@ def _spoken_arithmetic(text):
     return None, None
 
 
+def _show_number(result):
+    if isinstance(result, float):
+        if abs(result - round(result)) < 1e-9:
+            return str(int(round(result)))
+        text = f"{result:.10f}".rstrip("0").rstrip(".")
+        return text
+    return str(result)
+
+
 def _parse_natural_language_math(text):
     text_lower = text.lower()
     operator_symbol = None
@@ -131,6 +180,8 @@ def _parse_natural_language_math(text):
             operator_symbol = MATH_OPERATORS[keyword]
             break
     if not operator_symbol:
+        return None
+    if re.search(r"\b(becomes|number|percent)\b|%", text_lower):
         return None
 
     numbers = re.findall(r"\d+(?:\.\d+)?", text)
@@ -196,10 +247,9 @@ class IndependentAgent:
         if spoken_expr:
             try:
                 result = _evaluate_expression(spoken_expr)
-                shown = result if result != int(result) else int(result)
                 reply = (
                     f"I read that as {reading}. "
-                    f"{spoken_expr} = {shown}."
+                    f"{spoken_expr} = {_show_number(result)}."
                 )
                 return _personalize(reply, username)
             except Exception:
