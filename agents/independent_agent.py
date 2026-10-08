@@ -57,6 +57,72 @@ def _contains_math_keywords(text):
     return any(keyword in text_lower for keyword in MATH_OPERATORS)
 
 
+def _phrase_to_expr(phrase):
+    """Turn a short arithmetic phrase into a safe expression, or return None."""
+    text = phrase.lower().strip(" ?.!")
+    text = text.replace("divided by", "/")
+    text = text.replace("to the power", "**")
+    replacements = (
+        ("plus", "+"),
+        ("added to", "+"),
+        ("minus", "-"),
+        ("times", "*"),
+        ("multiplied by", "*"),
+        ("over", "/"),
+    )
+    for word, symbol in replacements:
+        text = re.sub(rf"\b{word}\b", symbol, text)
+    text = re.sub(r"[^0-9+\-*/().\s*]", "", text)
+    text = re.sub(r"\s+", "", text)
+    if not text or not re.search(r"\d", text):
+        return None
+    if not re.fullmatch(r"[0-9+\-*/().]+", text):
+        return None
+    return text
+
+
+def _spoken_arithmetic(text):
+    """
+    Resolve English arithmetic instead of treating it as an unknown sentence.
+    'the half of 4 + 6' means half of the whole sum, (4+6)/2.
+    'half of 4, plus 6' means (4/2)+6.
+    """
+    lowered = text.lower().strip()
+    if re.search(r"\b(prove|proof|induction|contrapositive|contradiction|subset|quantif)\b", lowered):
+        return None, None
+    lowered = re.sub(
+        r"^(what is|what's|whats|calculate|compute|find|how much is)\s+",
+        "",
+        lowered,
+    ).strip(" ?.")
+
+    split_half = re.fullmatch(
+        r"(?:the\s+)?half of\s+(\d+(?:\.\d+)?)\s*,\s*(?:plus|\+|and)\s+(\d+(?:\.\d+)?)",
+        lowered,
+    )
+    if split_half:
+        left, right = split_half.group(1), split_half.group(2)
+        expr = f"({left})/2+({right})"
+        return expr, f"half of {left} only, then add {right}"
+
+    whole_half = re.fullmatch(r"(?:the\s+)?half of\s+(.+)", lowered)
+    if whole_half:
+        inner = _phrase_to_expr(whole_half.group(1))
+        if inner:
+            return f"({inner})/2", f"half of the whole quantity {inner}"
+
+    twice = re.fullmatch(r"(?:twice|double)\s+(.+)", lowered)
+    if twice:
+        inner = _phrase_to_expr(twice.group(1))
+        if inner:
+            return f"2*({inner})", f"twice the quantity {inner}"
+
+    expr = _phrase_to_expr(lowered)
+    if expr and re.search(r"[+\-*/]", expr):
+        return expr, expr
+    return None, None
+
+
 def _parse_natural_language_math(text):
     text_lower = text.lower()
     operator_symbol = None
@@ -121,14 +187,32 @@ class IndependentAgent:
         text = message or ""
         lowered = text.lower()
 
-        if _contains_math_operation(text):
+        proof_question = bool(re.search(
+            r"\b(prove|proof|induction|contrapositive|contradiction|subset|quantif)\b",
+            lowered,
+        ))
+
+        spoken_expr, reading = (None, None) if proof_question else _spoken_arithmetic(text)
+        if spoken_expr:
+            try:
+                result = _evaluate_expression(spoken_expr)
+                shown = result if result != int(result) else int(result)
+                reply = (
+                    f"I read that as {reading}. "
+                    f"{spoken_expr} = {shown}."
+                )
+                return _personalize(reply, username)
+            except Exception:
+                pass
+
+        if _contains_math_operation(text) and not proof_question:
             try:
                 result = _evaluate_expression(text)
                 return _personalize(f"the result is {result}", username)
             except Exception:
                 pass
 
-        if _contains_math_keywords(text):
+        if _contains_math_keywords(text) and not proof_question:
             try:
                 math_expr = _parse_natural_language_math(text)
                 if math_expr:

@@ -2,16 +2,26 @@
 
 from agents.api_agent import ApiAgent
 from agents.independent_agent import IndependentAgent
+from agents.book_agent import BookAgent
 from agents.knowledge_agent import lookup_answer, ollama_answer
 
 _api_agent = None
 _independent_agent = None
+_book_agent = None
 
 
 def configure(trained_knowledge, word_meanings):
-    global _api_agent, _independent_agent
+    global _api_agent, _independent_agent, _book_agent
     _independent_agent = IndependentAgent(trained_knowledge, word_meanings)
     _api_agent = ApiAgent()
+    _book_agent = BookAgent()
+
+
+def book_agent():
+    global _book_agent
+    if _book_agent is None:
+        _book_agent = BookAgent()
+    return _book_agent
 
 
 def api_agent():
@@ -48,6 +58,11 @@ def answer_question(message, username=None, history=None, file=None):
             local_model["response"] = _with_name(local_model["response"], username)
             return local_model
 
+        from_books = book_agent().answer(text)
+        if from_books:
+            from_books["response"] = _with_name(from_books["response"], username)
+            return from_books
+
     prompt = text or "Describe this image."
     api_result = api.retrieve(prompt, history, file if has_file else None)
     if api_result:
@@ -62,9 +77,14 @@ def answer_question(message, username=None, history=None, file=None):
             fallback = f"{username}, {fallback}"
         return {"response": fallback, "source": "independent", "provider": "local"}
 
-    fallback = "I don't know yet. I'm still learning!"
+    fallback = (
+        "I don't have a matching page in the local books yet. "
+        "Say a bit more about what you want to prove or look up, and I will work from that."
+    )
     if independent is not None:
-        fallback = independent.fallback(text, username, history)
+        meaning = independent.fallback(text, username, history)
+        if meaning and "still learning" not in meaning.lower():
+            fallback = meaning
     return {"response": fallback, "source": "independent", "provider": "local"}
 
 

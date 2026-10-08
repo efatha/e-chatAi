@@ -389,13 +389,14 @@ form .file-upload-wrapper.eFile-uploaded .img{
 #start-record {
   background: none;
   border: none;
-  font-size: 20px;
+  font-size: 26px;
   cursor: pointer;
   padding: 4px;
-  margin-right: 17px;
+  margin-right: 14px;
 }
 #start-record:hover {
   color: var(--efa-code-color);
+  font-size: 28px;
 }
 
 .tooltip {

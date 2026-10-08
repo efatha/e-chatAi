@@ -3,3 +3,8 @@ __pycache__/
 *.pyc
 .env
 *.sqlite3
+
+# Local books stay on this machine. The agent reads them; git does not.
+*.pdf
+books/*
+!books/.gitkeep
