@@ -2,7 +2,7 @@
 
 from agents.api_agent import ApiAgent
 from agents.independent_agent import IndependentAgent
-from agents.book_agent import BookAgent
+from agents.book_agent import BookAgent, looks_like_reasoning
 from agents.knowledge_agent import lookup_answer, ollama_answer
 
 _api_agent = None
@@ -46,6 +46,12 @@ def answer_question(message, username=None, history=None, file=None):
         if local:
             return {"response": local, "source": "independent", "provider": "local"}
 
+    if text and not has_file and looks_like_reasoning(text):
+        from_books = book_agent().answer(text)
+        if from_books:
+            from_books["response"] = _with_name(from_books["response"], username)
+            return from_books
+
     if text and not has_file:
         meanings = independent.word_meanings if independent is not None else {}
         knowledge = lookup_answer(text, meanings)
@@ -57,11 +63,6 @@ def answer_question(message, username=None, history=None, file=None):
         if local_model:
             local_model["response"] = _with_name(local_model["response"], username)
             return local_model
-
-        from_books = book_agent().answer(text)
-        if from_books:
-            from_books["response"] = _with_name(from_books["response"], username)
-            return from_books
 
     prompt = text or "Describe this image."
     api_result = api.retrieve(prompt, history, file if has_file else None)

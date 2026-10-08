@@ -17,11 +17,17 @@ STOPWORDS = {
     "what", "why", "how", "does", "do", "can", "you", "me", "my", "i", "we",
     "please", "explain", "tell", "about",
 }
+FOCUS = {
+    "contrapositive", "converse", "induction", "contradiction", "quantifier",
+    "quantifiers", "subset", "biconditional", "negation", "irrational",
+    "implies", "existential", "universal",
+}
 REASONING_HINTS = (
     "prove", "proof", "show that", "therefore", "implies", "if and only if",
     "contrapositive", "contradiction", "induction", "quantif", "for all",
     "there exists", "set", "subset", "function", "theorem", "lemma", "axiom",
-    "definition", "logic", "predicate", "proposition", "formal",
+    "definition", "logic", "predicate", "proposition", "formal", "symbol",
+    "truth table", "biconditional", "negation", "converse", "given", "goal",
 )
 
 
@@ -46,41 +52,36 @@ class BookAgent:
             return None
 
         habit = _proof_habit(text)
-        if habit:
+        passages = self._from_each_book(text)
+        if habit or passages or _is_reasoning_question(text):
             return {
-                "response": habit,
+                "response": _speak(habit, passages),
                 "source": "book",
-                "provider": "book-of-proof",
-            }
-
-        passages = self._search(text)
-        if passages:
-            return {
-                "response": _from_books(text, passages),
-                "source": "book",
-                "provider": "books",
-            }
-
-        if _is_reasoning_question(text):
-            return {
-                "response": _reason_without_book(text),
-                "source": "book",
-                "provider": "reasoning",
+                "provider": "both-books",
             }
         return None
 
-    def _search(self, message, limit=3):
+    def _from_each_book(self, message):
+        """Best matching passage from each PDF, so both books can speak."""
         query = _tokens(message)
         if not query or not self.books:
             return []
-        scored = []
+        chosen = []
         for book in self.books:
+            best = None
             for chunk in book["chunks"]:
-                score = len(query & chunk["tokens"])
-                if score >= 2 or (score == 1 and len(query) <= 3):
-                    scored.append((score, book["title"], chunk["text"], chunk["page"]))
-        scored.sort(key=lambda item: item[0], reverse=True)
-        return scored[:limit]
+                overlap = query & chunk["tokens"]
+                score = len(overlap)
+                focused = FOCUS & query
+                if focused & chunk["tokens"]:
+                    score += 6
+                elif focused:
+                    score -= 2
+                if best is None or score > best[0]:
+                    best = (score, chunk["text"], chunk["page"])
+            if best and best[0] >= 2:
+                chosen.append((book["title"], best[2], _clip(best[1])))
+        return chosen
 
 
 def _read_pdf(path):
@@ -94,7 +95,7 @@ def _read_pdf(path):
         title = ""
         if reader.metadata and reader.metadata.title:
             title = str(reader.metadata.title).strip()
-        title = title or path.stem.replace("_", " ").replace("-", " ")
+        title = title or _display_title(path)
         chunks = []
         for index, page in enumerate(reader.pages, start=1):
             raw = page.extract_text() or ""
@@ -132,72 +133,122 @@ def _tokens(text):
     return {word for word in words if word not in STOPWORDS}
 
 
+def _display_title(path):
+    key = path.stem.lower()
+    if "bookofproof" in key.replace("-", "").replace("_", ""):
+        return "Book of Proof"
+    if "how-to-prove-it" in key or "howtoproveit" in key.replace("-", ""):
+        return "How to Prove It"
+    return path.stem.replace("_", " ").replace("-", " ")
+
+
+def _clip(text, limit=240):
+    snippet = re.sub(r"\s+", " ", text).strip()
+    if len(snippet) <= limit:
+        return snippet
+    return snippet[:limit].rsplit(" ", 1)[0] + "..."
+
+
+def _speak(habit, passages):
+    lines = []
+    if habit:
+        lines.append(habit)
+    else:
+        lines.append(
+            "Given the wording of your question, I will treat it as a claim to be proved, not a guess."
+        )
+    if passages:
+        lines.append("")
+        lines.append("Both local books are in use:")
+        for title, page, snippet in passages:
+            lines.append(f"• {title}, p. {page}: {snippet}")
+    lines.append("")
+    lines.append("I will stand on that reading: symbols first, then the proof, then the conclusion.")
+    return "\n".join(lines).strip()
+
+
+def looks_like_reasoning(text):
+    return _is_reasoning_question(text) or _proof_habit(text) is not None
+
+
 def _proof_habit(text):
-    """Short original replies in the style of a proof book: define, then conclude."""
+    """Symbolic proof talk. The wording is original; the books only supply support."""
     lowered = re.sub(r"\s+", " ", text.lower()).strip()
 
+    if "truth table" in lowered:
+        return (
+            "Given a formula built from P and Q. Goal: the rows where it is true.\n"
+            "∧ is true only when both sides are true. ∨ is false only when both are false. "
+            "¬ flips the value. P → Q is false only in the row P true, Q false. "
+            "P ↔ Q is true exactly when P and Q match. ∴ a truth table decides the connective before any English paraphrase."
+        )
+    if "negat" in lowered and ("quantif" in lowered or "for all" in lowered or "there exists" in lowered):
+        return (
+            "Negation pushes in and flips the quantifier.\n"
+            "¬∀x P(x)  ↔  ∃x ¬P(x).\n"
+            "¬∃x P(x)  ↔  ∀x ¬P(x).\n"
+            "So the denial of 'every integer is even' is 'some integer is not even', and one odd witness settles it."
+        )
     if "contrapositive" in lowered:
         return (
-            "The contrapositive of 'if P, then Q' is 'if not Q, then not P'. "
-            "It is equivalent to the original implication. "
-            "Example: 'if n is divisible by 4, then n is even' has contrapositive "
-            "'if n is not even, then n is not divisible by 4'. "
-            "The converse, 'if n is even, then n is divisible by 4', is a different statement and is false (n = 2)."
+            "Given P → Q. The contrapositive is ¬Q → ¬P, and (P → Q) ↔ (¬Q → ¬P).\n"
+            "Example: (4 | n) → Even(n). Contrapositive: ¬Even(n) → ¬(4 | n).\n"
+            "The converse Q → P is a different claim. Even(n) → (4 | n) is false, since n = 2 is a counterexample."
         )
-    if "converse" in lowered and "even" in lowered:
+    if "converse" in lowered:
         return (
-            "The converse swaps the hypothesis and the conclusion. "
-            "'If n is divisible by 4, then n is even' is true. "
-            "Its converse, 'if n is even, then n is divisible by 4', is false, because 2 is even and 2 is not divisible by 4."
+            "The converse of P → Q is Q → P. They are not equivalent.\n"
+            "(4 | n) → Even(n) is true. Even(n) → (4 | n) is false: n = 2 is even and 4 does not divide 2."
         )
-    if "if and only if" in lowered or re.search(r"\biff\b", lowered):
+    if "if and only if" in lowered or re.search(r"\biff\b", lowered) or "↔" in text or "<->" in lowered:
         return (
-            "An if-and-only-if statement is two proofs. "
-            "For 'n is even if and only if n squared is even': "
-            "first assume n = 2k and show n squared = 4k squared, which is even; "
-            "then assume n squared is even and show n cannot be odd, because an odd number squares to an odd number. "
-            "Both directions together are the equivalence."
+            "P ↔ Q means (P → Q) ∧ (Q → P). Both directions are required.\n"
+            "Even(n) ↔ Even(n²): if n = 2k then n² = 4k², so n² is even. "
+            "If n is odd then n² is odd, so the other direction is the contrapositive of 'odd squares stay odd'."
         )
     if "contradiction" in lowered or "irrational" in lowered or "square root of 2" in lowered or "sqrt(2)" in lowered or "√2" in text:
         return (
-            "Proof by contradiction starts by assuming the opposite of what you want. "
-            "To show that the square root of 2 is irrational, assume it equals a/b in lowest terms. "
-            "Then a squared = 2 b squared, so a is even, write a = 2k, and get b squared = 2 k squared, so b is even too. "
-            "Both a and b are even, which contradicts lowest terms. So no such fraction exists."
+            "To prove R, assume ¬R and reach S ∧ ¬S.\n"
+            "Assume √2 = a/b in lowest terms. Then a² = 2b², so a is even, a = 2k, hence b² = 2k², so b is even. "
+            "Thus 2 | a and 2 | b, contradicting lowest terms. ∴ √2 is irrational."
+        )
+    if "cases" in lowered:
+        return (
+            "A proof by cases splits the hypothesis into an exhaustive list.\n"
+            "Given P ∨ Q, and both P → R and Q → R, conclude R.\n"
+            "For an integer n, the cases n even and n odd cover every integer, so a claim proved in both cases holds for all n."
         )
     if "induction" in lowered:
         return (
-            "A proof by induction has two steps. "
-            "Base case: check the statement at the starting number, usually n = 1. "
-            "Inductive step: assume it is true for some n = k (the inductive hypothesis), and prove it for n = k+1 using that assumption. "
-            "For the sum 1+2+...+n = n(n+1)/2, the base case is 1 = 1·2/2. "
-            "If the sum to k equals k(k+1)/2, then the sum to k+1 equals that plus (k+1), which simplifies to (k+1)(k+2)/2."
+            "Given a statement P(n) for integers n ≥ 1. Goal: ∀n P(n).\n"
+            "Base: P(1). Inductive step: P(k) → P(k+1).\n"
+            "For Σ_{i=1}^{n} i = n(n+1)/2, P(1) is 1 = 1. "
+            "If the sum to k equals k(k+1)/2, the sum to k+1 equals that plus (k+1) = (k+1)(k+2)/2. ∴ P(k+1)."
         )
-    if "subset" in lowered or "element of" in lowered:
+    if "subset" in lowered or "∈" in text or "⊆" in text:
         return (
-            "A set is a collection of objects, and 'x is an element of A' means x is one of those objects. "
-            "A is a subset of B when every element of A is also an element of B. "
-            "To prove A ⊆ B, take an arbitrary x in A and show x is in B. "
-            "To prove A = B, prove both A ⊆ B and B ⊆ A."
+            "x ∈ A means x is a member of A. A ⊆ B means ∀x (x ∈ A → x ∈ B).\n"
+            "To prove A ⊆ B, let x be arbitrary, assume x ∈ A, and show x ∈ B. "
+            "A = B means (A ⊆ B) ∧ (B ⊆ A)."
         )
-    if "for all" in lowered or "there exists" in lowered or "quantif" in lowered:
+    if "for all" in lowered or "there exists" in lowered or "quantif" in lowered or "∀" in text or "∃" in text:
         return (
-            "A universal statement 'for all x in S, P(x)' is proved by letting x be an arbitrary member of S and proving P(x) with nothing special assumed about x. "
-            "An existence statement 'there exists x in S with P(x)' is proved by naming one witness that works. "
-            "One counterexample kills a 'for all', but one example does not prove a 'for all'."
+            "∀x ∈ S, P(x) is proved by letting x be an arbitrary element of S and proving P(x).\n"
+            "∃x ∈ S, P(x) is proved by naming one witness.\n"
+            "One counterexample refutes ∀. One example never proves ∀."
         )
     if re.search(r"\b(prove|show that)\b", lowered) and "even" in lowered:
         return (
-            "Definition first: an integer is even when it equals 2k for some integer k. "
-            "Let the two even integers be 2a and 2b. "
-            "Their sum is 2a + 2b = 2(a+b), and a+b is an integer, so the sum is even. "
-            "That is a direct proof: the definition was used, and the goal was the last line."
+            "Definition: Even(n) ↔ ∃k ∈ Z (n = 2k).\n"
+            "Given Even(a) ∧ Even(b). Then a = 2m and b = 2n, so a + b = 2(m+n). "
+            "m+n ∈ Z, hence Even(a+b). ∴ the sum of two even integers is even."
         )
-    if re.search(r"\b(prove|show that|direct proof)\b", lowered):
+    if re.search(r"\b(prove|show that|direct proof|symbol)\b", lowered):
         return (
-            "A direct proof names the hypothesis, recalls the definition of each word in the goal, "
-            "and writes a chain of equalities or implications that ends at the conclusion. "
-            "Nothing is used that was not given or previously defined."
+            "Structured proof, the way both books train it.\n"
+            "Given: the hypotheses. Goal: the claim.\n"
+            "Write the goal as symbols (→, ↔, ∀, ∃, ∈, ⊆) before the prose. "
+            "Each line is either given, a definition, or a consequence of earlier lines. The last line is the goal."
         )
     return None
 
@@ -206,53 +257,6 @@ def _is_reasoning_question(text):
     lowered = text.lower()
     if any(hint in lowered for hint in REASONING_HINTS):
         return True
+    if re.search(r"[∀∃∈⊆∧∨¬→↔√]", text):
+        return True
     return bool(re.search(r"\b(why|how)\b", lowered)) and len(_tokens(text)) >= 3
-
-
-def _from_books(message, passages):
-    lines = ["Here is how I would work through that from the books on this machine.", ""]
-    for _score, title, excerpt, page in passages:
-        snippet = excerpt.strip()
-        if len(snippet) > 500:
-            snippet = snippet[:500].rsplit(" ", 1)[0] + "..."
-        lines.append(f"From {title}, page {page}:")
-        lines.append(snippet)
-        lines.append("")
-    lines.append(
-        "Using that, start from the definitions in the passage, "
-        "name what is given, and then take one step at a time toward what was asked."
-    )
-    return "\n".join(lines).strip()
-
-
-def _reason_without_book(text):
-    lowered = text.lower()
-    steps = [
-        "Let me treat this as a formal-math question and set it up before jumping to a claim.",
-        "",
-        f"Question: {text.strip()}",
-        "",
-        "1. Write the statement in symbols if it is not already: sets, quantifiers, or an implication P → Q.",
-        "2. List what is given and what must be shown. Do not use a word until it has a definition.",
-    ]
-    if any(word in lowered for word in ("if and only if", "iff")):
-        steps.append("3. An if-and-only-if needs both directions: assume P and derive Q, then assume Q and derive P.")
-    elif "contrapositive" in lowered:
-        steps.append("3. The contrapositive of P → Q is ¬Q → ¬P. Prove that, and the original implication follows.")
-    elif "contradiction" in lowered:
-        steps.append("3. Assume the claim is false, derive a statement and its negation, and that contradiction proves the claim.")
-    elif "induction" in lowered:
-        steps.append("3. For induction: check the base case, assume it holds for n, and derive it for n+1 from that assumption only.")
-    elif any(word in lowered for word in ("for all", "there exists", "quantif")):
-        steps.append("3. For ∀x, let x be an arbitrary element of the domain. For ∃x, produce one explicit witness.")
-    elif any(word in lowered for word in ("set", "subset", "element")):
-        steps.append("3. For A ⊆ B, take an arbitrary x ∈ A and show x ∈ B. For equality, show both inclusions.")
-    else:
-        steps.append("3. Prefer a direct proof. If that stalls, try the contrapositive, then proof by contradiction.")
-    steps.append("4. End by stating that the goal has been reached, and name the definition or axiom each step used.")
-    steps.append("")
-    steps.append(
-        "Place a formal-mathematics PDF in the books folder and I will quote the matching pages "
-        "instead of only this outline."
-    )
-    return "\n".join(steps)
