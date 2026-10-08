@@ -4,6 +4,7 @@ from agents.api_agent import ApiAgent
 from agents.independent_agent import IndependentAgent
 from agents.book_agent import BookAgent, looks_like_reasoning
 from agents.knowledge_agent import lookup_answer, ollama_answer
+from agents.linear_algebra import answer as linear_answer
 
 _api_agent = None
 _independent_agent = None
@@ -45,6 +46,12 @@ def answer_question(message, username=None, history=None, file=None):
         local = independent.confident_answer(text, username, history)
         if local:
             return {"response": local, "source": "independent", "provider": "local"}
+
+    if text and not has_file:
+        numeric = linear_answer(text)
+        if numeric:
+            numeric["response"] = _with_name(numeric["response"], username)
+            return numeric
 
     if text and not has_file and looks_like_reasoning(text):
         from_books = book_agent().answer(text)
