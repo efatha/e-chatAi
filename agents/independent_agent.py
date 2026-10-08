@@ -104,37 +104,9 @@ def _spoken_arithmetic(text):
         rate, whole = percent.group(1), percent.group(2)
         return f"({rate}/100)*({whole})", f"{rate}% of {whole}"
 
-    scaled = re.search(
-        r"multiplied by\s+(\d+(?:\.\d+)?)\s+(?:and\s+)?(?:becomes|is|equals)\s+(\d+(?:\.\d+)?)",
-        lowered,
-    )
-    if scaled:
-        factor, total = scaled.group(1), scaled.group(2)
-        return f"({total})/({factor})", f"n × {factor} = {total}, so n = {total}/{factor}"
-
-    divided = re.search(
-        r"divided by\s+(\d+(?:\.\d+)?)\s+(?:and\s+)?(?:becomes|is|equals)\s+(\d+(?:\.\d+)?)",
-        lowered,
-    )
-    if divided:
-        factor, total = divided.group(1), divided.group(2)
-        return f"({total})*({factor})", f"n / {factor} = {total}, so n = {total} × {factor}"
-
-    increased = re.search(
-        r"(?:increased|added) by\s+(\d+(?:\.\d+)?)\s+(?:and\s+)?(?:becomes|is|equals)\s+(\d+(?:\.\d+)?)",
-        lowered,
-    )
-    if increased:
-        amount, total = increased.group(1), increased.group(2)
-        return f"({total})-({amount})", f"n + {amount} = {total}, so n = {total} - {amount}"
-
-    decreased = re.search(
-        r"(?:decreased|subtracted|reduced) by\s+(\d+(?:\.\d+)?)\s+(?:and\s+)?(?:becomes|is|equals)\s+(\d+(?:\.\d+)?)",
-        lowered,
-    )
-    if decreased:
-        amount, total = decreased.group(1), decreased.group(2)
-        return f"({total})+({amount})", f"n - {amount} = {total}, so n = {total} + {amount}"
+    unknown = _unknown_number(lowered)
+    if unknown:
+        return unknown
 
     split_half = re.fullmatch(
         r"(?:the\s+)?half of\s+(\d+(?:\.\d+)?)\s*,\s*(?:plus|\+|and)\s+(\d+(?:\.\d+)?)",
@@ -161,6 +133,51 @@ def _spoken_arithmetic(text):
     if expr and re.search(r"[+\-*/]", expr):
         return expr, expr
     return None, None
+
+
+def _unknown_number(text):
+    """
+    Recover n from the operation and the result, ignoring commas and wording.
+    'multiplied by 3, and becomes 20' is the same fact as 'multiplied by 3 and becomes 20': n × 3 = 20.
+    """
+    flat = re.sub(r"[,:;]+", " ", text)
+    flat = re.sub(r"\s+", " ", flat).strip()
+    operations = (
+        (r"multiplied by|times|multiplied with", "mul"),
+        (r"divided by", "div"),
+        (r"increased by|added by|added to|plus", "add"),
+        (r"decreased by|subtracted by|reduced by|taken away|minus", "sub"),
+    )
+    found = None
+    for pattern, kind in operations:
+        match = re.search(rf"(?:{pattern})\s+(\d+(?:\.\d+)?)", flat)
+        if match and (found is None or match.start() < found[0].start()):
+            found = (match, kind)
+        front = re.search(
+            rf"(\d+(?:\.\d+)?)\s+(?:{pattern})\s+(?:a |the |that |some )?number",
+            flat,
+        )
+        if front and (found is None or front.start() < found[0].start()):
+            found = (front, kind)
+    if not found:
+        return None
+
+    match, kind = found
+    factor = match.group(1)
+    result = re.search(
+        r"(?:becomes|become|equals|equal|yields|gives|results in|comes to|is)\s+(\d+(?:\.\d+)?)",
+        flat[match.end():],
+    )
+    if not result:
+        return None
+    total = result.group(1)
+    if kind == "mul":
+        return f"({total})/({factor})", f"n × {factor} = {total}, so n = {total}/{factor}"
+    if kind == "div":
+        return f"({total})*({factor})", f"n / {factor} = {total}, so n = {total} × {factor}"
+    if kind == "add":
+        return f"({total})-({factor})", f"n + {factor} = {total}, so n = {total} - {factor}"
+    return f"({total})+({factor})", f"n - {factor} = {total}, so n = {total} + {factor}"
 
 
 def _show_number(result):
