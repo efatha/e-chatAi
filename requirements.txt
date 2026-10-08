@@ -1,7 +1,6 @@
 Flask==3.0.0
 gunicorn==21.2.0
 sympy==1.12          # extra math support
-numpy==2.5.2          # matrix storage, eigenvalues, and numerical checks
 pypdf==5.4.0          # read local reasoning books; the PDFs stay untracked
 requests==2.32.0     # dictionary API and Ollama
 wikipedia-api==0.16.0 # Wikipedia summaries for topic lookups
