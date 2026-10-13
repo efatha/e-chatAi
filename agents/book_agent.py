@@ -72,13 +72,13 @@ class BookAgent:
 
         habit = _proof_habit(text)
         passages = self._from_each_book(text)
-        if habit or passages or _is_reasoning_question(text):
-            return {
-                "response": _speak(text, habit, passages),
-                "source": "book",
-                "provider": "both-books",
-            }
-        return None
+        if not passages and not habit:
+            return None
+        return {
+            "response": _speak(text, habit, passages),
+            "source": "book",
+            "provider": "both-books",
+        }
 
     def _from_each_book(self, message):
         """Top passages by how rare the question's words are in that page."""
@@ -236,6 +236,8 @@ def _logic_line(text):
         ("convex", "Definition. C is convex when ∀x,y ∈ C and ∀t ∈ [0,1], t x + (1−t) y ∈ C."),
         ("variance", "Definition. Variance is the expected squared distance from the mean: Var(X) = E[(X − E[X])²]."),
         ("confidence interval", "Definition. A confidence interval is a range computed from the sample that is claimed to cover the population parameter in a stated fraction of repeated samples."),
+        ("priority", "Definition. In a statistics question, priority is read as probability: a number from 0 to 1 for how often an outcome happens over many repetitions."),
+        ("probability", "Definition. A probability is a number from 0 to 1 for how often an outcome happens over many repetitions."),
     )
     for needle, line in forms:
         if re.search(rf"\b{re.escape(needle)}\b", lowered):
