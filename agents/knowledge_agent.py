@@ -43,7 +43,8 @@ def detect_lookup(message):
     if dictionary_match:
         term = _clean_term(dictionary_match.group(1))
         if _usable_term(term) and not _looks_like_math(term):
-            return {"kind": "dictionary", "term": term}
+            kind = "dictionary" if len(term.split()) == 1 else "topic"
+            return {"kind": kind, "term": term}
 
     topic_match = TOPIC_RE.match(text)
     if topic_match:
@@ -66,6 +67,10 @@ def lookup_answer(message, local_meanings=None):
     term = found["term"]
     single_word = len(term.split()) == 1
     local = _local_meaning(term, local_meanings or {}) if single_word else None
+    # A word you already taught wins. The public dictionary's first sense
+    # for "python" is the snake, which replaces your programming definition.
+    if local and found["kind"] == "dictionary":
+        return {"response": local, "source": "independent", "provider": "local"}
     dictionary = dictionary_entry(term) if single_word else None
     # A meaning question should not fall through to a Wikipedia disambiguation
     # page when this project already has a definition for that word.

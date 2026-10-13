@@ -3,7 +3,7 @@
 from agents.api_agent import ApiAgent
 from agents.independent_agent import IndependentAgent
 from agents.book_agent import BookAgent, looks_like_reasoning
-from agents.knowledge_agent import lookup_answer, ollama_answer
+from agents.knowledge_agent import detect_lookup, lookup_answer, ollama_answer
 from agents.knowledge_agent import wikipedia_summary
 from agents.reasoning_patterns import concept_terms, pattern_answer
 
@@ -57,6 +57,15 @@ def answer_question(message, username=None, history=None, file=None):
             if patterned:
                 patterned["response"] = _with_name(patterned["response"], username)
                 return patterned
+
+    if text and not has_file:
+        found = detect_lookup(text)
+        if found and found.get("kind") == "dictionary":
+            meanings = independent.word_meanings if independent is not None else {}
+            knowledge = lookup_answer(text, meanings)
+            if knowledge:
+                knowledge["response"] = _with_name(knowledge["response"], username)
+                return knowledge
 
     if text and not has_file and looks_like_reasoning(text):
         from_books = book_agent().answer(text)

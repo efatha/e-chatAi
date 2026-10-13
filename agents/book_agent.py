@@ -5,6 +5,8 @@ committed. More PDFs can be added later; each file becomes another book.
 """
 
 import logging
+import math
+import pickle
 import re
 from pathlib import Path
 
@@ -30,6 +32,8 @@ REASONING_HINTS = (
     "truth table", "biconditional", "negation", "converse", "given", "goal",
     "compare", "versus", "difference", "tradeoff", "prefer", "better",
     "linear", "matrix", "vector", "convex", "gradient", "eigen",
+    "bayes", "posterior", "prior", "likelihood",
+    "variance", "statistic", "statistics", "hypothesis", "distribution", "confidence",
 )
 
 
@@ -37,16 +41,29 @@ class BookAgent:
     def __init__(self, books_dir=BOOKS_DIR):
         self.books_dir = Path(books_dir)
         self.books = []
+        self._idf = {}
         self.refresh()
 
     def refresh(self):
         self.books = []
+        self._idf = {}
         if not self.books_dir.exists():
             return
-        for path in sorted(self.books_dir.glob("*.pdf")):
+        pdfs = sorted(self.books_dir.glob("*.pdf"))
+        signature = [
+            (path.name, path.stat().st_size, path.stat().st_mtime_ns)
+            for path in pdfs
+        ]
+        cached = _load_cache(self.books_dir, signature)
+        if cached:
+            self.books, self._idf = cached
+            return
+        for path in pdfs:
             book = _read_pdf(path)
             if book and book["chunks"]:
                 self.books.append(book)
+        self._idf = _idf_table(self.books)
+        _save_cache(self.books_dir, signature, self.books, self._idf)
 
     def answer(self, message):
         text = (message or "").strip()
@@ -57,34 +74,36 @@ class BookAgent:
         passages = self._from_each_book(text)
         if habit or passages or _is_reasoning_question(text):
             return {
-                "response": _speak(habit, passages),
+                "response": _speak(text, habit, passages),
                 "source": "book",
                 "provider": "both-books",
             }
         return None
 
     def _from_each_book(self, message):
-        """Best matching passage from each PDF, so both books can speak."""
+        """Top passages by how rare the question's words are in that page."""
         query = _tokens(message)
         if not query or not self.books:
             return []
-        chosen = []
+        ranked = []
+        rarest = max(query, key=lambda token: self._idf.get(token, 0))
         for book in self.books:
             best = None
             for chunk in book["chunks"]:
-                overlap = query & chunk["tokens"]
-                score = len(overlap)
-                focused = FOCUS & query
-                if focused & chunk["tokens"]:
-                    score += 6
-                elif focused:
-                    score -= 2
+                score = _tfidf(query, chunk["tokens"], self._idf)
+                if rarest in chunk["tokens"]:
+                    score += self._idf.get(rarest, 0)
+                if chunk["text"].count(" . ") > 6:
+                    score *= 0.15
                 if best is None or score > best[0]:
                     best = (score, chunk["text"], chunk["page"])
-            if best and best[0] >= 2:
-                chosen.append((best[0], book["title"], best[2], _clip(best[1])))
-        chosen.sort(key=lambda item: item[0], reverse=True)
-        return [(title, page, snippet) for _score, title, page, snippet in chosen[:2]]
+            if best and best[0] >= 4:
+                ranked.append((best[0], book["title"], best[2], _clip(best[1])))
+        ranked.sort(key=lambda item: item[0], reverse=True)
+        kept = ranked[:1]
+        if len(ranked) > 1 and ranked[1][0] >= ranked[0][0] * 0.72:
+            kept.append(ranked[1])
+        return [(title, page, snippet) for _score, title, page, snippet in kept]
 
     def excerpts(self, message):
         lines = []
@@ -101,10 +120,11 @@ def _read_pdf(path):
         return None
     try:
         reader = PdfReader(str(path))
-        title = ""
-        if reader.metadata and reader.metadata.title:
+        title = _known_title(path)
+        if not title and reader.metadata and reader.metadata.title:
             title = str(reader.metadata.title).strip()
-        title = title or _display_title(path)
+        if not title or "/" in title or "\\" in title or title.lower().endswith(".dvi"):
+            title = _display_title(path)
         chunks = []
         for index, page in enumerate(reader.pages, start=1):
             raw = page.extract_text() or ""
@@ -142,17 +162,28 @@ def _tokens(text):
     return {word for word in words if word not in STOPWORDS}
 
 
+def _known_title(path):
+    key = path.stem.lower().replace("-", "").replace("_", "").replace(" ", "")
+    names = (
+        ("bookofproof", "Book of Proof"),
+        ("howtoproveit", "How to Prove It"),
+        ("hefferon", "Linear Algebra (Hefferon)"),
+        ("linearalgebra", "Linear Algebra"),
+        ("convex", "Convex Optimization"),
+        ("thinkbayes", "Think Bayes"),
+        ("thinkpython", "Think Python"),
+        ("openlogic", "Open Logic"),
+        ("introductorystatistics", "Introductory Statistics"),
+        ("bayesreasoning", "Bayesian Reasoning and Machine Learning"),
+    )
+    for needle, title in names:
+        if needle in key:
+            return title
+    return ""
+
+
 def _display_title(path):
-    key = path.stem.lower()
-    if "bookofproof" in key.replace("-", "").replace("_", ""):
-        return "Book of Proof"
-    if "how-to-prove-it" in key or "howtoproveit" in key.replace("-", ""):
-        return "How to Prove It"
-    if "linear" in key and "algebra" in key:
-        return "Linear Algebra"
-    if "convex" in key:
-        return "Convex Optimization"
-    return path.stem.replace("_", " ").replace("-", " ")
+    return _known_title(path) or path.stem.replace("_", " ").replace("-", " ")
 
 
 def _clip(text, limit=240):
@@ -162,24 +193,71 @@ def _clip(text, limit=240):
     return snippet[:limit].rsplit(" ", 1)[0] + "..."
 
 
-def _speak(habit, passages):
-    lines = []
+def _rephrase(text):
+    """Say the question back once, in a form that can be answered."""
+    body = re.sub(r"\s+", " ", text or "").strip(" ?.!")
+    body = re.sub(
+        r"^(?:please\s+)?(?:can you\s+|could you\s+|would you\s+)?(?:explain\s+|tell me\s+)?",
+        "",
+        body,
+        flags=re.IGNORECASE,
+    ).strip()
+    if not body:
+        return "Restated once: say the claim you want checked."
+    sentence = body[0].upper() + body[1:]
+    if not sentence.endswith("."):
+        sentence += "."
+    return f"Restated once: {sentence}"
+
+
+def _logic_line(text):
+    """A definition or a symbol form, only when the question names that idea."""
+    lowered = (text or "").lower()
+    forms = (
+        ("contrapositive", "Definition. The contrapositive of P → Q is ¬Q → ¬P. They are the same claim: (P → Q) ↔ (¬Q → ¬P)."),
+        ("converse", "Definition. The converse of P → Q is Q → P. It is a different claim."),
+        ("if and only if", "Definition. P ↔ Q means (P → Q) ∧ (Q → P)."),
+        ("biconditional", "Definition. P ↔ Q means (P → Q) ∧ (Q → P)."),
+        ("contradiction", "Definition. A proof by contradiction assumes the denial of the goal and derives ⊥."),
+        ("induction", "Definition. Induction: prove P(0), then ∀k (P(k) → P(k+1)), hence ∀n P(n)."),
+        ("posterior", "Definition. The posterior is P(A|B) = P(B|A) P(A) / P(B). P(A) is the prior."),
+        ("prior", "Definition. The prior is P(A), the belief before the evidence B. The posterior is P(A|B)."),
+        ("likelihood", "Definition. The likelihood of a hypothesis A given evidence B is P(B|A)."),
+        ("subspace", "Definition. A subspace is closed under addition and scalar multiplication, so it contains 0."),
+        ("basis", "Definition. A basis of V is a linearly independent list that spans V."),
+        ("span", "Definition. span(v₁,…,vₙ) = {a₁v₁ + … + aₙvₙ}."),
+        ("eigen", "Definition. A v = λ v, with v ≠ 0. λ is an eigenvalue and v is an eigenvector."),
+        ("convex", "Definition. C is convex when ∀x,y ∈ C and ∀t ∈ [0,1], t x + (1−t) y ∈ C."),
+        ("variance", "Definition. Variance is the expected squared distance from the mean: Var(X) = E[(X − E[X])²]."),
+        ("confidence interval", "Definition. A confidence interval is a range computed from the sample that is claimed to cover the population parameter in a stated fraction of repeated samples."),
+    )
+    for needle, line in forms:
+        if re.search(rf"\b{re.escape(needle)}\b", lowered):
+            return line
+    return ""
+
+
+def _speak(text, habit, passages):
+    lines = [_rephrase(text), ""]
+    logic = _logic_line(text)
+    if logic:
+        lines.append(logic)
+        lines.append("")
     if habit:
         lines.append(habit)
+    elif passages:
+        lines.append("I am answering from the page that uses these words, then saying what that page commits me to.")
     else:
-        lines.append(
-            "Given the wording of your question, I will treat it as a claim to be proved, not a guess."
-        )
+        lines.append("I will treat this as a claim to be proved, not a guess.")
     if passages:
         lines.append("")
-        lines.append("From the books on this machine:")
+        lines.append("Reference.")
         for title, page, snippet in passages:
             lines.append(f"• {title}, p. {page}: {snippet}")
     lines.append("")
     lines.append(
-        "In ordinary speech: I start from what you gave me, I say the goal in a sentence, "
-        "and I keep a symbol only when it makes that sentence sharper. "
-        "The last line is the conclusion I am willing to defend."
+        "In ordinary speech: the restatement is the claim, the definition is the rule, "
+        "and the page is the place I took the words from."
     )
     return "\n".join(lines).strip()
 
@@ -391,8 +469,59 @@ def _proof_habit(text):
 
 def _is_reasoning_question(text):
     lowered = text.lower()
-    if any(hint in lowered for hint in REASONING_HINTS):
-        return True
+    for hint in REASONING_HINTS:
+        if " " in hint:
+            if hint in lowered:
+                return True
+        elif re.search(rf"\b{re.escape(hint)}\b", lowered):
+            return True
     if re.search(r"[∀∃∈⊆∧∨¬→↔√]", text):
         return True
     return bool(re.search(r"\b(why|how)\b", lowered)) and len(_tokens(text)) >= 3
+
+
+def _idf_table(books):
+    counts = {}
+    total = 0
+    for book in books:
+        for chunk in book["chunks"]:
+            total += 1
+            for token in chunk["tokens"]:
+                counts[token] = counts.get(token, 0) + 1
+    if not total:
+        return {}
+    return {
+        token: math.log((total + 1) / (count + 1)) + 1
+        for token, count in counts.items()
+    }
+
+
+def _tfidf(query, tokens, idf):
+    return sum(idf.get(token, 0) for token in query if token in tokens)
+
+
+def _cache_path(books_dir):
+    return Path(books_dir) / ".index.pkl"
+
+
+def _load_cache(books_dir, signature):
+    path = _cache_path(books_dir)
+    if not path.exists():
+        return None
+    try:
+        with path.open("rb") as handle:
+            payload = pickle.load(handle)
+        if payload.get("signature") != signature:
+            return None
+        return payload["books"], payload["idf"]
+    except Exception:
+        return None
+
+
+def _save_cache(books_dir, signature, books, idf):
+    path = _cache_path(books_dir)
+    try:
+        with path.open("wb") as handle:
+            pickle.dump({"signature": signature, "books": books, "idf": idf}, handle)
+    except Exception as exc:
+        logger.warning("Could not save the book index: %s", type(exc).__name__)
