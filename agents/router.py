@@ -85,6 +85,13 @@ def answer_question(message, username=None, history=None, file=None):
             local_model["response"] = _with_name(local_model["response"], username)
             return local_model
 
+        from_books = book_agent().answer(text)
+        if from_books and "local books yet" not in from_books["response"].lower():
+            passages = book_agent().excerpts(text)
+            if passages:
+                from_books["response"] = _with_name(from_books["response"], username)
+                return from_books
+
     prompt = text or "Describe this image."
     api_result = api.retrieve(prompt, history, file if has_file else None)
     if api_result:

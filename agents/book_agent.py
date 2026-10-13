@@ -83,6 +83,8 @@ class BookAgent:
     def _from_each_book(self, message):
         """Top passages by how rare the question's words are in that page."""
         query = _tokens(message)
+        if "statistic" in (message or "").lower():
+            query = set(query) | {"probability", "statistics"}
         if not query or not self.books:
             return []
         ranked = []
@@ -90,11 +92,15 @@ class BookAgent:
         for book in self.books:
             best = None
             for chunk in book["chunks"]:
+                if not _on_topic(message, book["title"], chunk["text"]):
+                    continue
                 score = _tfidf(query, chunk["tokens"], self._idf)
                 if rarest in chunk["tokens"]:
                     score += self._idf.get(rarest, 0)
-                if chunk["text"].count(" . ") > 6:
-                    score *= 0.15
+                if "statistic" in (message or "").lower() and "statistic" in book["title"].lower():
+                    score += 3
+                if chunk["text"].count(" . ") > 6 or chunk["text"].lower().count("chapter") >= 3:
+                    score *= 0.1
                 if best is None or score > best[0]:
                     best = (score, chunk["text"], chunk["page"])
             if best and best[0] >= 4:
@@ -260,6 +266,15 @@ def _speak(text, habit, passages):
         "and the page is the place I took the words from."
     )
     return "\n".join(lines).strip()
+
+
+def _on_topic(message, title, text):
+    """A statistics question must come from a statistics page, not a chance use of one word."""
+    lowered = (message or "").lower()
+    if "statistic" not in lowered:
+        return True
+    blob = f"{title} {text}".lower()
+    return any(word in blob for word in ("statistic", "probability", "variance", "distribution", "sample"))
 
 
 def looks_like_reasoning(text):
