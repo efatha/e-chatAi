@@ -1,5 +1,6 @@
 from flask import Flask, render_template, request, jsonify
 import os
+import logging
 from dotenv import load_dotenv
 
 load_dotenv()  # loads variables from .env
@@ -10,11 +11,37 @@ from werkzeug.utils import secure_filename
 from agents.router import answer_question, api_agent, book_agent, configure
 from agents.book_agent import BOOKS_DIR
 
+logger = logging.getLogger(__name__)
+
 # Load the data.json file
 with open("data.json", "r", encoding="utf-8") as f:
     DATA = json.load(f)
 
 configure(DATA.get("trained_knowledge", []), DATA.get("word_meanings", {}))
+
+
+def _fetch_private_books():
+    """Download PDFs named only in the server environment. They are not in git."""
+    raw = os.getenv("BOOK_URLS", "").replace(",", " ").split()
+    if not raw:
+        return
+    import requests
+
+    BOOKS_DIR.mkdir(parents=True, exist_ok=True)
+    for index, url in enumerate(raw, start=1):
+        name = secure_filename(url.split("?")[0].rstrip("/").split("/")[-1])
+        if not name.lower().endswith(".pdf"):
+            name = f"book-{index}.pdf"
+        try:
+            response = requests.get(url, timeout=180)
+            response.raise_for_status()
+            (BOOKS_DIR / name).write_bytes(response.content)
+        except Exception as exc:
+            logger.warning("Private book download failed: %s", type(exc).__name__)
+    book_agent().refresh()
+
+
+_fetch_private_books()
 
 app = Flask(__name__)
 
