@@ -28,10 +28,116 @@ const finishMessage = (incomingMsgDiv) => {
   eChatBody.scrollTo({ top: eChatBody.scrollHeight, behavior: "smooth" });
 };
 
+const escapeHtml = (value) => value
+  .replace(/&/g, "&amp;")
+  .replace(/</g, "&lt;")
+  .replace(/>/g, "&gt;");
+
+const colorWords = (escaped) => escaped.replace(
+  /\b(python|java|javascript|html|css|code)\b/gi,
+  (word) => {
+    const key = word.toLowerCase() === "javascript" ? "js" : word.toLowerCase();
+    return `<span class="tok-word tok-${key}">${word}</span>`;
+  }
+);
+
+const indentGuides = (line) => {
+  const spaces = (line.match(/^( *)/) || [""])[0];
+  const steps = Math.floor(spaces.length / 2);
+  const leftover = spaces.length % 2;
+  let guides = "";
+  for (let i = 0; i < steps; i += 1) guides += '<span class="indent-guide">  </span>';
+  if (leftover) guides += " ";
+  return { guides, body: line.slice(spaces.length) };
+};
+
+const paintHtml = (body) => {
+  let src = escapeHtml(body);
+  src = src.replace(/(&lt;!--[\s\S]*?--&gt;)/g, '<span class="tok-c">$1</span>');
+  src = src.replace(/(&lt;!DOCTYPE)(\s+)([a-zA-Z]+)/gi, '<span class="tok-punct">$1</span>$2<span class="tok-name">$3</span>');
+  src = src.replace(/(&lt;\/?)([a-zA-Z][\w-]*)([^&]*?)(\/?&gt;)/g, (_full, open, tag, rest, close) => {
+    const attrs = rest.replace(
+      /([a-zA-Z_:][\w:.-]*)(=)("[^"]*")/g,
+      '<span class="tok-attr">$1</span><span class="tok-punct">$2</span><span class="tok-str">$3</span>'
+    );
+    return `<span class="tok-punct">${open}</span><span class="tok-tag">${tag}</span>${attrs}<span class="tok-punct">${close}</span>`;
+  });
+  src = src.replace(/(^|[{;])\s*([a-zA-Z-]+)(\s*:)/g, '$1 <span class="tok-attr">$2</span><span class="tok-punct">$3</span>');
+  return src;
+};
+
+const paintCode = (body) => {
+  let src = escapeHtml(body);
+  src = src.replace(/(#[^\n]*|\/\/[^\n]*)/g, '<span class="tok-c">$1</span>');
+  src = src.replace(/(&quot;[^&]*&quot;|"[^"\n]*"|'[^'\n]*')/g, '<span class="tok-str">$1</span>');
+  src = src.replace(/\b(\d+(?:\.\d+)?)\b/g, '<span class="tok-num">$1</span>');
+  src = src.replace(
+    /\b(def|class|return|if|else|for|while|import|from|public|static|void|new|function|const|let|var|print)\b/g,
+    '<span class="tok-key">$1</span>'
+  );
+  src = src.replace(/\b([A-Za-z_][\w]*)(?=\s*\()/g, '<span class="tok-fn">$1</span>');
+  return src;
+};
+
+const highlightCode = (code, language) => {
+  const lang = (language || "").toLowerCase();
+  const htmlLike = lang === "html" || /<\s*\/?[a-z!]/i.test(code);
+  const lines = String(code).replace(/\n$/, "").split("\n");
+  return lines.map((line, index) => {
+    const { guides, body } = indentGuides(line);
+    const painted = htmlLike ? paintHtml(body) : paintCode(body);
+    const number = String(index + 1);
+    return `<div class="code-line"><span class="ln">${number}</span><span class="code-text">${guides}${painted}</span></div>`;
+  }).join("");
+};
+
+const COPY_ICON = '<svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M4 16V6a2 2 0 0 1 2-2h10" fill="none" stroke="currentColor" stroke-width="2"/></svg>';
+
+const renderReply = (text, blocks) => {
+  const sourceText = String(text || "");
+  const re = /```([a-zA-Z0-9+#]*)\n([\s\S]*?)```/g;
+  let html = "";
+  let cursor = 0;
+  let match;
+  while ((match = re.exec(sourceText)) !== null) {
+    const prose = sourceText.slice(cursor, match.index).trim();
+    if (prose) html += `<div class="reply-prose">${colorWords(escapeHtml(prose)).replace(/\n/g, "<br>")}</div>`;
+    const language = (match[1] || "code").toLowerCase();
+    const source = match[2].replace(/\n$/, "");
+    blocks.push(source);
+    const labels = { html: "HTML", python: "Python", java: "Java", css: "CSS", javascript: "JavaScript" };
+    const label = labels[language] || language.toUpperCase();
+    html += `<div class="code-card"><div class="code-bar"><span>${label}</span><button type="button" class="code-copy" aria-label="Copy code">${COPY_ICON}<span>Copy</span></button></div><div class="code-lines">${highlightCode(source, language)}</div></div>`;
+    cursor = match.index + match[0].length;
+  }
+  const tail = sourceText.slice(cursor).trim();
+  if (tail) html += `<div class="reply-prose">${colorWords(escapeHtml(tail)).replace(/\n/g, "<br>")}</div>`;
+  if (!html) html = `<div class="reply-prose">${colorWords(escapeHtml(sourceText))}</div>`;
+  return html;
+};
+
+const wireCopyButtons = (root, blocks) => {
+  root.querySelectorAll(".code-copy").forEach((button, index) => {
+    button.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(blocks[index] || "");
+        const label = button.querySelector("span");
+        label.textContent = "Copied";
+        button.classList.add("copied");
+        setTimeout(() => {
+          label.textContent = "Copy";
+          button.classList.remove("copied");
+        }, 1400);
+      } catch (error) {
+        console.error("Copy failed:", error);
+      }
+    });
+  });
+};
+
 // Ask the server. It uses the independent agent, or the API when that API is active.
 const generateEchatResponse = async (incomingMsgDiv) => {
   const msgElement = incomingMsgDiv.querySelector(".message-text");
-  const msgLower = (userData.message || "").toLowerCase();
   const payload = { message: userData.message || "" };
   if (userData.file.data) payload.file = userData.file;
   userData.file = { data: null, mime_type: null };
@@ -45,19 +151,20 @@ const generateEchatResponse = async (incomingMsgDiv) => {
     const data = await response.json();
 
     if (response.ok && data.response) {
-      msgElement.innerText = data.response;
-
-      if (data.source === "independent") {
-        msgElement.style.backgroundColor = "#397d92";
-        msgElement.style.color = "#fff8f2";
-      }
-
-      if (["code", "js", "html", "css", "python", "api"].some(key => msgLower.includes(key))) {
-        msgElement.style.backgroundColor = "#282c34";
-        msgElement.style.color = "#f8f8f2";
-        msgElement.style.fontFamily = "monospace";
-        msgElement.style.padding = "10px";
-        msgElement.style.borderRadius = "5px";
+      const hasCode = /```[a-zA-Z0-9+#]*\n[\s\S]*?```/.test(data.response);
+      if (hasCode) {
+        const blocks = [];
+        msgElement.innerHTML = renderReply(data.response, blocks);
+        msgElement.style.backgroundColor = "";
+        msgElement.style.color = "";
+        msgElement.style.padding = "";
+        wireCopyButtons(msgElement, blocks);
+      } else {
+        msgElement.innerText = data.response;
+        if (data.source === "independent") {
+          msgElement.style.backgroundColor = "#397d92";
+          msgElement.style.color = "#fff8f2";
+        }
       }
 
       finishMessage(incomingMsgDiv);

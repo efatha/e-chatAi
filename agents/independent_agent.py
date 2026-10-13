@@ -226,6 +226,55 @@ def _evaluate_expression(expr):
     return eval_node(parsed.body)
 
 
+def _code_reply(text):
+    """A short fenced sample when the user asks for code, so the chat can color it."""
+    lowered = (text or "").lower()
+    if not re.search(r"\b(write|create|make|generate|draft|show)\b", lowered):
+        return None
+    if not re.search(r"\b(code|html|python|java|css|javascript)\b", lowered):
+        return None
+    if re.search(r"\bhtml\b", lowered):
+        language, body = "html", (
+            "<!DOCTYPE html>\n"
+            "<html>\n"
+            "<head>\n"
+            "  <title>e-Chat</title>\n"
+            "</head>\n"
+            "<body>\n"
+            "  <h1>Hello</h1>\n"
+            "  <p>This page was written for you.</p>\n"
+            "</body>\n"
+            "</html>"
+        )
+        intro = "Here is a small HTML page."
+    elif re.search(r"\bjava\b", lowered) and not re.search(r"\bjavascript\b", lowered):
+        language, body = "java", (
+            "public class Hello {\n"
+            "    public static void main(String[] args) {\n"
+            "        System.out.println(\"Hello\");\n"
+            "    }\n"
+            "}"
+        )
+        intro = "Here is a small Java program."
+    elif re.search(r"\bcss\b", lowered):
+        language, body = "css", (
+            "body {\n"
+            "  background: #282a36;\n"
+            "  color: #f8f8f2;\n"
+            "}"
+        )
+        intro = "Here is a small CSS rule."
+    else:
+        language, body = "python", (
+            "def greet(name):\n"
+            "    return f\"Hello, {name}\"\n"
+            "\n"
+            "print(greet(\"e-Chat\"))"
+        )
+        intro = "Here is a small Python function."
+    return f"{intro}\n\n```{language}\n{body}\n```"
+
+
 def _lookup_word(message, word_meanings):
     message_lower = message.lower()
     for pattern in MEANING_PATTERNS:
@@ -254,6 +303,10 @@ class IndependentAgent:
         history = history or []
         text = message or ""
         lowered = text.lower()
+
+        coded = _code_reply(text)
+        if coded:
+            return _personalize(coded, username)
 
         proof_question = bool(re.search(
             r"\b(prove|proof|induction|contrapositive|contradiction|subset|quantif)\b",

@@ -168,6 +168,98 @@ body{
   border-radius: 12px 12px 2px 12px; /* Creates a chat bubble effect */
 
 }
+.message-text:has(.code-card) {
+  background: transparent;
+  padding: 0;
+}
+.reply-prose {
+  background: var(--efa-sea);
+  color: #fff8f2;
+  padding: 12px 16px;
+  border-radius: 12px 12px 12px 2px;
+  margin-bottom: 8px;
+}
+.reply-prose .tok-word {
+  font-family: Consolas, "Courier New", monospace;
+  font-weight: 600;
+}
+.reply-prose .tok-python { color: #50fa7b; }
+.reply-prose .tok-java { color: #ffb86c; }
+.reply-prose .tok-html { color: #ff79c6; }
+.reply-prose .tok-css { color: #8be9fd; }
+.reply-prose .tok-js { color: #f1fa8c; }
+.reply-prose .tok-code { color: #bd93f9; }
+.code-card {
+  background: #1e1e1e;
+  border-radius: 8px;
+  border: 1px solid #3c3c3c;
+  margin-top: 4px;
+}
+.code-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: #252526;
+  color: #cccccc;
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 12px;
+  padding: 6px 8px 6px 12px;
+  border-bottom: 1px solid #3c3c3c;
+}
+.code-copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: #2d2d2d;
+  color: #cccccc;
+  border: 1px solid #3c3c3c;
+  border-radius: 4px;
+  padding: 3px 8px;
+  cursor: pointer;
+  font: inherit;
+}
+.code-copy:hover { color: #ffffff; border-color: #007acc; }
+.code-copy.copied { color: #89d185; border-color: #89d185; }
+.code-lines {
+  overflow-x: auto;
+  padding: 6px 0 10px;
+  background: #1e1e1e;
+}
+.code-line {
+  display: flex;
+  min-height: 1.45em;
+  font-family: Consolas, "Cascadia Code", "Courier New", monospace;
+  font-size: 13px;
+  line-height: 1.45;
+  white-space: pre;
+}
+.ln {
+  flex: 0 0 2.8em;
+  text-align: right;
+  padding-right: 1em;
+  color: #858585;
+  user-select: none;
+}
+.code-text { color: #d4d4d4; }
+.indent-guide {
+  display: inline-block;
+  width: 2ch;
+  border-left: 1px solid rgba(255, 255, 255, 0.12);
+  box-sizing: border-box;
+}
+.code-card .tok-tag { color: #4ec9b0; }
+.code-card .tok-punct { color: #808080; }
+.code-card .tok-attr { color: #9cdcfe; }
+.code-card .tok-str { color: #ce9178; }
+.code-card .tok-c { color: #6a9955; font-style: italic; }
+.code-card .tok-key { color: #c586c0; }
+.code-card .tok-fn { color: #dcdcaa; }
+.code-card .tok-num { color: #b5cea8; }
+.code-card .tok-name { color: #569cd6; }
+
 .chat-body .message .message-text .thinking-indicator{
   padding: 10px 12px;
   max-width: 100%;
