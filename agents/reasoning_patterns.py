@@ -65,18 +65,22 @@ def _comparison(lowered, text, notes):
     right_note = notes.get(right) or ""
     left_used = set()
     right_used = set()
-    left_line = _mark_example(_take_sentence(left_note, left_used) or f"I do not have a source page for {left} yet, so I will not invent its definition.")
-    right_line = _mark_example(_take_sentence(right_note, right_used) or f"I do not have a source page for {right} yet, so I will not invent its definition.")
+    left_line = _take_sentence(left_note, left_used) or f"I do not have a source page for {left} yet, so I will not invent its definition."
+    right_line = _take_sentence(right_note, right_used) or f"I do not have a source page for {right} yet, so I will not invent its definition."
+    left_adv = _side_point(left, left_note, _ADVANTAGE_CUES, "what it can do", left_used)
+    right_adv = _side_point(right, right_note, _ADVANTAGE_CUES, "what it can do", right_used)
+    left_limit = _side_point(left, left_note, _LIMIT_CUES, "where it stops", left_used)
+    right_limit = _side_point(right, right_note, _LIMIT_CUES, "where it stops", right_used)
     left_name = _star(left)
     right_name = _star(right)
     return (
         f"{left_name} and {right_name}\n"
         f"- {left_name}: {left_line}\n"
         f"- {right_name}: {right_line}\n"
-        f"- Advantages of {left_name}: {_mark_example(_side_point(left, left_note, _ADVANTAGE_CUES, 'what it can do', left_used))}\n"
-        f"- Advantages of {right_name}: {_mark_example(_side_point(right, right_note, _ADVANTAGE_CUES, 'what it can do', right_used))}\n"
-        f"- Limitations of {left_name}: {_mark_example(_side_point(left, left_note, _LIMIT_CUES, 'where it stops', left_used))}\n"
-        f"- Limitations of {right_name}: {_mark_example(_side_point(right, right_note, _LIMIT_CUES, 'where it stops', right_used))}"
+        f"Advantages: {left_name}{_body(left_adv, left)} "
+        f"{_link_word(left, right, 'advantage')} {right_name}{_body(right_adv, right)}\n"
+        f"Limitations: {left_name}{_body(left_limit, left)} "
+        f"{_link_word(left, right, 'limit')} {right_name}{_body(right_limit, right)}"
     )
 
 
@@ -272,6 +276,29 @@ def _hypotheses(situation, hypotheses, tests):
 def _star(term):
     label = " ".join(part[:1].upper() + part[1:] for part in term.split())
     return f"*{label}*"
+
+
+def _body(point, term):
+    raw = (point or "").split(": ", 1)[-1].strip()
+    stripped = re.sub(rf"^{re.escape(term)}\b[:,]?\s*", "", raw, count=1, flags=re.IGNORECASE)
+    body = stripped.strip().rstrip(".")
+    if not body:
+        return ""
+    if stripped != raw or re.match(r"^(It|The|This|They|There)\b", body):
+        body = re.sub(r"^(it|they)\s+", "", body, count=1, flags=re.IGNORECASE)
+        body = body[:1].lower() + body[1:]
+        return f" {body}."
+    if body[:1].isupper():
+        return f", {body}."
+    return f" {body}."
+
+
+def _link_word(left, right, kind):
+    words = ("However", "While", "Whereas", "Yet")
+    index = sum(ord(char) for char in (left + right).lower()) % len(words)
+    if kind == "advantage":
+        return words[index]
+    return words[(index + 1) % len(words)]
 
 
 def _mark_example(sentence):
