@@ -106,10 +106,16 @@ def answer_question(message, username=None, history=None, file=None):
             fallback = f"{username}, {fallback}"
         return {"response": fallback, "source": "independent", "provider": "local"}
 
-    fallback = (
-        "I don't have a matching page in the local books yet. "
-        "Say a bit more about what you want to prove or look up, and I will work from that."
-    )
+    if not book_agent().books:
+        fallback = (
+            "This server has no PDFs in the books folder, so there is no page to cite. "
+            "The books and books/.index.pkl stay on the machine where they were indexed."
+        )
+    else:
+        fallback = (
+            "I don't have a matching page in the local books yet. "
+            "Say a bit more about what you want to prove or look up, and I will work from that."
+        )
     if independent is not None:
         meaning = independent.fallback(text, username, history)
         if meaning and "still learning" not in meaning.lower():

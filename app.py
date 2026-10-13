@@ -5,8 +5,10 @@ from dotenv import load_dotenv
 load_dotenv()  # loads variables from .env
 import json
 from flask import session
+from werkzeug.utils import secure_filename
 
-from agents.router import answer_question, api_agent, configure
+from agents.router import answer_question, api_agent, book_agent, configure
+from agents.book_agent import BOOKS_DIR
 
 # Load the data.json file
 with open("data.json", "r", encoding="utf-8") as f:
@@ -38,6 +40,47 @@ def chat():
 @app.route("/login")
 def login():
     return render_template("login.html")
+
+
+def _portal_key():
+    return os.getenv("BOOK_PORTAL_KEY", "").strip()
+
+
+def _portal_unlocked():
+    key = _portal_key()
+    sent = (request.form.get("key") or "").strip()
+    if key and sent == key:
+        session["book_portal"] = key
+        session.modified = True
+    return bool(key) and session.get("book_portal") == key
+
+
+@app.route("/library", methods=["GET", "POST"])
+def library():
+    """Hidden upload. Not linked from the chat. Rebuilds the book index on this server."""
+    message = ""
+    if request.method == "POST" and _portal_unlocked() and request.files.get("pdf"):
+        upload = request.files["pdf"]
+        name = secure_filename(upload.filename or "")
+        if not name.lower().endswith(".pdf"):
+            message = "Only a PDF can be added."
+        else:
+            BOOKS_DIR.mkdir(parents=True, exist_ok=True)
+            upload.save(BOOKS_DIR / name)
+            book_agent().refresh()
+            message = f"Indexed {name}."
+    agent = book_agent()
+    titles = [book.get("title") or "Untitled" for book in agent.books]
+    return render_template(
+        "library.html",
+        configured=bool(_portal_key()),
+        unlocked=_portal_unlocked(),
+        titles=titles,
+        count=len(titles),
+        key=_portal_key() if _portal_unlocked() else "",
+        message=message,
+    )
+
 
 def _chat_turn():
     data = request.get_json(silent=True) or {}

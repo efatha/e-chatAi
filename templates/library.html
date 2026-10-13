@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Library</title>
+  <style>
+    body { font-family: Georgia, serif; margin: 40px auto; max-width: 640px; color: #1e1e1e; }
+    input, button { font: inherit; padding: 8px; }
+    li { margin: 6px 0; }
+    .note { color: #555; }
+  </style>
+</head>
+<body>
+  <h1>Library</h1>
+  <p class="note">This page is not linked from the chat. A PDF saved here is read on this server, then the reference index is rebuilt.</p>
+  {% if not configured %}
+  <p>Set BOOK_PORTAL_KEY on this server, then open this page again.</p>
+  {% elif not unlocked %}
+  <form method="post">
+    <input type="password" name="key" placeholder="portal key" required>
+    <button type="submit">Open</button>
+  </form>
+  {% else %}
+  <p>{{ count }} book{{ '' if count == 1 else 's' }} indexed.</p>
+  <ul>
+    {% for title in titles %}
+    <li>{{ title }}</li>
+    {% else %}
+    <li>No PDFs yet.</li>
+    {% endfor %}
+  </ul>
+  <form method="post" enctype="multipart/form-data">
+    <input type="hidden" name="key" value="{{ key }}">
+    <input type="file" name="pdf" accept="application/pdf,.pdf" required>
+    <button type="submit">Add book and rebuild the index</button>
+  </form>
+  {% if message %}<p>{{ message }}</p>{% endif %}
+  {% endif %}
+</body>
+</html>
