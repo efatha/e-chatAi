@@ -108,7 +108,7 @@ class BookAgent:
     def excerpts(self, message):
         lines = []
         for title, page, snippet in self._from_each_book(message):
-            lines.append(f"• {title}, p. {page}: {snippet}")
+            lines.append(f"• _{title}, p. {page}_: {snippet}")
         return lines
 
 
@@ -253,7 +253,7 @@ def _speak(text, habit, passages):
         lines.append("")
         lines.append("Reference.")
         for title, page, snippet in passages:
-            lines.append(f"• {title}, p. {page}: {snippet}")
+            lines.append(f"• _{title}, p. {page}_: {snippet}")
     lines.append("")
     lines.append(
         "In ordinary speech: the restatement is the claim, the definition is the rule, "

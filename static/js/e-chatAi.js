@@ -119,6 +119,7 @@ const renderReply = (text, blocks) => {
 const formatMarked = (text) => escapeHtml(text)
   .replace(/\*([^*\n]+)\*/g, "<strong>$1</strong>")
   .replace(/_([^_\n]+)_/g, "<em>$1</em>")
+  .replace(/\bp\. \d+/g, "<em>$&</em>")
   .replace(/\*/g, "")
   .replace(/\n/g, "<br>");
 
@@ -158,7 +159,7 @@ const generateEchatResponse = async (incomingMsgDiv) => {
 
     if (response.ok && data.response) {
       const hasCode = /```[a-zA-Z0-9+#]*\n[\s\S]*?```/.test(data.response);
-      const hasMarks = /\*[^*\n]+\*/.test(data.response) || /_[^_\n]+_/.test(data.response);
+      const hasMarks = /\*[^*\n]+\*/.test(data.response) || /_[^_\n]+_/.test(data.response) || /\bp\. \d+/.test(data.response);
       if (hasCode) {
         const blocks = [];
         msgElement.innerHTML = renderReply(data.response, blocks);
