@@ -284,6 +284,9 @@ def _lookup_word(message, word_meanings):
         word = match.group(2)
         if word in SKIP_MEANING_WORDS:
             return None, False
+        # "what is priority in statistics" is a book question, not a one-word definition.
+        if message_lower[match.end():].strip(" ?.!"):
+            continue
         meaning = word_meanings.get(word)
         if meaning:
             return f"📖 {word.capitalize()}: {meaning}", True
