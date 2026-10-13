@@ -51,7 +51,7 @@ class BookAgent:
             return
         pdfs = sorted(self.books_dir.glob("*.pdf"))
         signature = [
-            (path.name, path.stat().st_size, path.stat().st_mtime_ns)
+            (path.name, path.stat().st_size)
             for path in pdfs
         ]
         cached = _load_cache(self.books_dir, signature)
@@ -64,6 +64,8 @@ class BookAgent:
                 self.books.append(book)
         self._idf = _idf_table(self.books)
         _save_cache(self.books_dir, signature, self.books, self._idf)
+        if not self.books:
+            logger.warning("No local books were loaded from %s", self.books_dir)
 
     def answer(self, message):
         text = (message or "").strip()
@@ -528,11 +530,22 @@ def _load_cache(books_dir, signature):
     try:
         with path.open("rb") as handle:
             payload = pickle.load(handle)
-        if payload.get("signature") != signature:
+        if payload.get("signature") != signature and not _same_books(payload.get("signature"), signature):
             return None
         return payload["books"], payload["idf"]
     except Exception:
         return None
+
+
+def _same_books(saved, current):
+    """Name and size are enough. A changed timestamp must not force a full reread."""
+    def key(item):
+        if not isinstance(item, (list, tuple)) or len(item) < 2:
+            return None
+        return (item[0], item[1])
+    if not isinstance(saved, list) or not isinstance(current, list):
+        return False
+    return [key(item) for item in saved] == [key(item) for item in current]
 
 
 def _save_cache(books_dir, signature, books, idf):
