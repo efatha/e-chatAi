@@ -164,6 +164,8 @@ body{
   border-radius: 8px;
   border-radius: 12px 12px 12px 2px;
 }
+.chat-body .message .message-text strong { font-weight: 700; }
+.chat-body .message .message-text em { font-style: italic; }
 .chat-body .bot .message-text{
   border-radius: 12px 12px 2px 12px; /* Creates a chat bubble effect */
 

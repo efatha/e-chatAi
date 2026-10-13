@@ -65,20 +65,18 @@ def _comparison(lowered, text, notes):
     right_note = notes.get(right) or ""
     left_used = set()
     right_used = set()
-    left_line = _take_sentence(left_note, left_used) or f"I do not have a source page for {left} yet, so I will not invent its definition."
-    right_line = _take_sentence(right_note, right_used) or f"I do not have a source page for {right} yet, so I will not invent its definition."
-    direction = "better" if "better" in lowered else "the difference"
+    left_line = _mark_example(_take_sentence(left_note, left_used) or f"I do not have a source page for {left} yet, so I will not invent its definition.")
+    right_line = _mark_example(_take_sentence(right_note, right_used) or f"I do not have a source page for {right} yet, so I will not invent its definition.")
+    left_name = _star(left)
+    right_name = _star(right)
     return (
-        f"Comparison. I chose the sense that can actually be compared, then read each page once.\n"
-        f"{left}: {left_line}\n"
-        f"{right}: {right_line}\n\n"
-        f"Advantages. {_side_point(left, left_note, _ADVANTAGE_CUES, 'what it can do', left_used)}\n"
-        f"{_side_point(right, right_note, _ADVANTAGE_CUES, 'what it can do', right_used)}\n\n"
-        f"Limitations. {_side_point(left, left_note, _LIMIT_CUES, 'where it stops', left_used)}\n"
-        f"{_side_point(right, right_note, _LIMIT_CUES, 'where it stops', right_used)}\n\n"
-        f"Direction. Words only in {left}: {_only_words(left_note, right_note)}. "
-        f"Words only in {right}: {_only_words(right_note, left_note)}. "
-        f"I pick {left} when the task needs its words, and {right} when it needs the other list."
+        f"{left_name} and {right_name}\n"
+        f"- {left_name}: {left_line}\n"
+        f"- {right_name}: {right_line}\n"
+        f"- Advantages of {left_name}: {_mark_example(_side_point(left, left_note, _ADVANTAGE_CUES, 'what it can do', left_used))}\n"
+        f"- Advantages of {right_name}: {_mark_example(_side_point(right, right_note, _ADVANTAGE_CUES, 'what it can do', right_used))}\n"
+        f"- Limitations of {left_name}: {_mark_example(_side_point(left, left_note, _LIMIT_CUES, 'where it stops', left_used))}\n"
+        f"- Limitations of {right_name}: {_mark_example(_side_point(right, right_note, _LIMIT_CUES, 'where it stops', right_used))}"
     )
 
 
@@ -88,7 +86,7 @@ def _counterexample(lowered, text, notes):
     return (
         "Claim. One example never proves a 'for all', but one counterexample refutes it.\n\n"
         "Counterexample. I look for a single case that meets the hypothesis and misses the conclusion. "
-        "For 'every even number is divisible by 4', n = 2 is even and 4 does not divide 2.\n\n"
+        "For 'every even number is divisible by 4', _n = 2 is even and 4 does not divide 2_.\n\n"
         "Check. State the hypothesis, state the failed conclusion, and stop. No further cases are required once one witness exists."
     )
 
@@ -268,6 +266,24 @@ def _hypotheses(situation, hypotheses, tests):
         f"Hypotheses.\n{hypo}\n\n"
         f"Tests.\n{check}\n\n"
         "I do not pick a cause until one of those tests favors it and the others do not."
+    )
+
+
+def _star(term):
+    label = " ".join(part[:1].upper() + part[1:] for part in term.split())
+    return f"*{label}*"
+
+
+def _mark_example(sentence):
+    """Italicize a concrete example, and leave the rest of the sentence plain."""
+    def wrap(match):
+        return match.group(1) + "_" + match.group(2).strip(" ") + "_"
+    return re.sub(
+        r"((?:for example|e\.g\.|such as)[:,]?\s+)([^.]+)",
+        wrap,
+        sentence or "",
+        count=1,
+        flags=re.IGNORECASE,
     )
 
 

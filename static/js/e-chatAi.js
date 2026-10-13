@@ -116,6 +116,12 @@ const renderReply = (text, blocks) => {
   return html;
 };
 
+const formatMarked = (text) => escapeHtml(text)
+  .replace(/\*([^*\n]+)\*/g, "<strong>$1</strong>")
+  .replace(/_([^_\n]+)_/g, "<em>$1</em>")
+  .replace(/\*/g, "")
+  .replace(/\n/g, "<br>");
+
 const wireCopyButtons = (root, blocks) => {
   root.querySelectorAll(".code-copy").forEach((button, index) => {
     button.addEventListener("click", async () => {
@@ -152,6 +158,7 @@ const generateEchatResponse = async (incomingMsgDiv) => {
 
     if (response.ok && data.response) {
       const hasCode = /```[a-zA-Z0-9+#]*\n[\s\S]*?```/.test(data.response);
+      const hasMarks = /\*[^*\n]+\*/.test(data.response) || /_[^_\n]+_/.test(data.response);
       if (hasCode) {
         const blocks = [];
         msgElement.innerHTML = renderReply(data.response, blocks);
@@ -159,6 +166,12 @@ const generateEchatResponse = async (incomingMsgDiv) => {
         msgElement.style.color = "";
         msgElement.style.padding = "";
         wireCopyButtons(msgElement, blocks);
+      } else if (hasMarks) {
+        msgElement.innerHTML = formatMarked(data.response);
+        if (data.source === "independent") {
+          msgElement.style.backgroundColor = "#397d92";
+          msgElement.style.color = "#fff8f2";
+        }
       } else {
         msgElement.innerText = data.response;
         if (data.source === "independent") {
