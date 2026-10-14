@@ -1,7 +1,7 @@
 from flask import Flask, render_template, request, jsonify
 import os
 import re
-import threading
+import time
 from dotenv import load_dotenv
 
 load_dotenv()  # loads variables from .env
@@ -40,33 +40,24 @@ def _pdf_bytes(body):
 
 
 def _save_drive_pdf(session, file_id):
-    """Download one Drive file. Large files need the usercontent confirm link."""
-    url = "https://drive.usercontent.google.com/download"
-    response = session.get(
-        url,
-        params={"id": file_id, "export": "download", "confirm": "t"},
-        timeout=120,
-    )
+    """The small-file link that saved Think Python, then one confirm try for a larger file."""
+    url = f"https://drive.google.com/uc?export=download&id={file_id}"
+    response = session.get(url, timeout=12)
     response.raise_for_status()
     pdf = _pdf_bytes(response.content)
     if pdf:
         return pdf
     text = response.content.decode("utf-8", errors="ignore")
     confirm = re.search(r"confirm=([0-9A-Za-z_\-]+)", text)
-    if not confirm:
-        return None
-    confirmed = session.get(
-        url,
-        params={"id": file_id, "export": "download", "confirm": confirm.group(1)},
-        timeout=180,
-    )
+    token = confirm.group(1) if confirm else "t"
+    confirmed = session.get(url + "&confirm=" + token, timeout=15)
     confirmed.raise_for_status()
     return _pdf_bytes(confirmed.content)
 
 
 def _fetch_private_books():
-    """Download PDFs from BOOK_URLS. The links stay in Render, not in git."""
-    raw = os.getenv("BOOK_URLS", "").replace(",", " ").split()
+    """Download the first five BOOK_URLS before the site opens, then stop."""
+    raw = os.getenv("BOOK_URLS", "").replace(",", " ").split()[:5]
     if not raw:
         return
     import logging
@@ -76,21 +67,22 @@ def _fetch_private_books():
     log = logging.getLogger(__name__)
     BOOKS_DIR.mkdir(parents=True, exist_ok=True)
     saved = 0
+    started = time.time()
     session = requests.Session()
     session.headers["User-Agent"] = "Mozilla/5.0"
     for index, link in enumerate(raw, start=1):
+        if time.time() - started > 40:
+            log.warning("Stopped after %s books so the site can open.", saved)
+            break
         file_id = _drive_file_id(link)
         if not file_id:
             log.warning("Book link %s is a folder or not a Drive file link.", index)
             continue
-        name = secure_filename(file_id) + ".pdf"
+        name = secure_filename(f"book-{index}") + ".pdf"
         try:
             body = _save_drive_pdf(session, file_id)
             if not body:
-                log.warning(
-                    "Book %s did not download. Set General access to Anyone with the link.",
-                    index,
-                )
+                log.warning("Book %s was not a PDF.", index)
                 continue
             (BOOKS_DIR / name).write_bytes(body)
             saved += 1
@@ -102,7 +94,7 @@ def _fetch_private_books():
         log.warning("Indexed %s private books.", saved)
 
 
-threading.Thread(target=_fetch_private_books, daemon=True).start()
+_fetch_private_books()
 
 app = Flask(__name__)
 
