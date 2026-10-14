@@ -18,34 +18,50 @@ with open("data.json", "r", encoding="utf-8") as f:
 configure(DATA.get("trained_knowledge", []), DATA.get("word_meanings", {}))
 
 
-def _drive_download_url(link):
-    """Turn a Drive file link into a direct download. A folder link cannot be read."""
+def _drive_file_id(link):
     text = (link or "").strip()
+    if "/folders/" in text:
+        return ""
     marker = "/file/d/"
     if marker in text:
-        file_id = text.split(marker, 1)[1].split("/", 1)[0]
-        return f"https://drive.google.com/uc?export=download&id={file_id}"
+        return text.split(marker, 1)[1].split("/", 1)[0].split("?", 1)[0]
     if "id=" in text:
-        return text
-    return text
+        return text.split("id=", 1)[1].split("&", 1)[0]
+    return ""
 
 
-def _save_drive_pdf(session, url):
-    """Drive returns the PDF, or an HTML warning page for a large file."""
-    response = session.get(url, timeout=60)
+def _pdf_bytes(body):
+    if not body:
+        return None
+    start = body.find(b"%PDF-")
+    if start < 0 or start > 1024:
+        return None
+    return body[start:]
+
+
+def _save_drive_pdf(session, file_id):
+    """Download one Drive file. Large files need the usercontent confirm link."""
+    url = "https://drive.usercontent.google.com/download"
+    response = session.get(
+        url,
+        params={"id": file_id, "export": "download", "confirm": "t"},
+        timeout=120,
+    )
     response.raise_for_status()
-    body = response.content
-    if body[:5] == b"%PDF-":
-        return body
-    text = body.decode("utf-8", errors="ignore")
+    pdf = _pdf_bytes(response.content)
+    if pdf:
+        return pdf
+    text = response.content.decode("utf-8", errors="ignore")
     confirm = re.search(r"confirm=([0-9A-Za-z_\-]+)", text)
     if not confirm:
         return None
-    confirmed = session.get(url + "&confirm=" + confirm.group(1), timeout=120)
+    confirmed = session.get(
+        url,
+        params={"id": file_id, "export": "download", "confirm": confirm.group(1)},
+        timeout=180,
+    )
     confirmed.raise_for_status()
-    if confirmed.content[:5] == b"%PDF-":
-        return confirmed.content
-    return None
+    return _pdf_bytes(confirmed.content)
 
 
 def _fetch_private_books():
@@ -61,29 +77,29 @@ def _fetch_private_books():
     BOOKS_DIR.mkdir(parents=True, exist_ok=True)
     saved = 0
     session = requests.Session()
+    session.headers["User-Agent"] = "Mozilla/5.0"
     for index, link in enumerate(raw, start=1):
-        if "/folders/" in link:
-            log.warning("Skipped a Google Drive folder link. Paste one link per PDF.")
+        file_id = _drive_file_id(link)
+        if not file_id:
+            log.warning("Book link %s is a folder or not a Drive file link.", index)
             continue
-        url = _drive_download_url(link)
-        file_id = ""
-        if "id=" in url:
-            file_id = url.split("id=", 1)[1].split("&", 1)[0]
-        name = secure_filename(file_id or f"book-{index}") + ".pdf"
+        name = secure_filename(file_id) + ".pdf"
         try:
-            body = _save_drive_pdf(session, url)
+            body = _save_drive_pdf(session, file_id)
             if not body:
                 log.warning(
-                    "Book %s was not a PDF. Set General access to Anyone with the link. Viewer, Commenter, and Editor all work.",
+                    "Book %s did not download. Set General access to Anyone with the link.",
                     index,
                 )
                 continue
             (BOOKS_DIR / name).write_bytes(body)
             saved += 1
+            log.warning("Saved private book %s (%s bytes).", index, len(body))
         except Exception as exc:
-            log.warning("Private book download failed: %s", type(exc).__name__)
+            log.warning("Private book %s failed: %s", index, type(exc).__name__)
     if saved:
         book_agent().refresh()
+        log.warning("Indexed %s private books.", saved)
 
 
 threading.Thread(target=_fetch_private_books, daemon=True).start()
