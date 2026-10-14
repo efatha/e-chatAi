@@ -1,6 +1,7 @@
 from flask import Flask, render_template, request, jsonify
 import os
 import re
+import threading
 import time
 from dotenv import load_dotenv
 
@@ -94,7 +95,7 @@ def _fetch_private_books():
         log.warning("Indexed %s private books.", saved)
 
 
-_fetch_private_books()
+threading.Thread(target=_fetch_private_books, daemon=True).start()
 
 app = Flask(__name__)
 
