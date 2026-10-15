@@ -632,7 +632,7 @@ form .file-upload-wrapper.eFile-uploaded .img{
 @media (max-width:678px) {
  article{
   padding: 0px;
-  margin: 15px auto;
+  margin-bottom: 150px;
  }
  .chatbot-popup{
   max-width:360px;
