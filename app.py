@@ -2,7 +2,6 @@ from flask import Flask, render_template, request, jsonify
 import os
 import re
 import threading
-import time
 from dotenv import load_dotenv
 
 load_dotenv()  # loads variables from .env
@@ -41,9 +40,9 @@ def _pdf_bytes(body):
 
 
 def _save_drive_pdf(session, file_id):
-    """The small-file link that saved Think Python, then one confirm try for a larger file."""
+    """Drive file link. A large file returns a warning page, then one confirm download."""
     url = f"https://drive.google.com/uc?export=download&id={file_id}"
-    response = session.get(url, timeout=12)
+    response = session.get(url, timeout=60)
     response.raise_for_status()
     pdf = _pdf_bytes(response.content)
     if pdf:
@@ -51,14 +50,14 @@ def _save_drive_pdf(session, file_id):
     text = response.content.decode("utf-8", errors="ignore")
     confirm = re.search(r"confirm=([0-9A-Za-z_\-]+)", text)
     token = confirm.group(1) if confirm else "t"
-    confirmed = session.get(url + "&confirm=" + token, timeout=15)
+    confirmed = session.get(url + "&confirm=" + token, timeout=180)
     confirmed.raise_for_status()
     return _pdf_bytes(confirmed.content)
 
 
 def _fetch_private_books():
-    """Download the first five BOOK_URLS before the site opens, then stop."""
-    raw = os.getenv("BOOK_URLS", "").replace(",", " ").split()[:5]
+    """Download every BOOK_URLS file in the background. The site opens first."""
+    raw = os.getenv("BOOK_URLS", "").replace(",", " ").split()
     if not raw:
         return
     import logging
@@ -68,31 +67,30 @@ def _fetch_private_books():
     log = logging.getLogger(__name__)
     BOOKS_DIR.mkdir(parents=True, exist_ok=True)
     saved = 0
-    started = time.time()
     session = requests.Session()
     session.headers["User-Agent"] = "Mozilla/5.0"
     for index, link in enumerate(raw, start=1):
-        if time.time() - started > 40:
-            log.warning("Stopped after %s books so the site can open.", saved)
-            break
         file_id = _drive_file_id(link)
         if not file_id:
             log.warning("Book link %s is a folder or not a Drive file link.", index)
             continue
-        name = secure_filename(f"book-{index}") + ".pdf"
+        path = BOOKS_DIR / (secure_filename(f"book-{index}") + ".pdf")
+        if path.is_file() and path.stat().st_size > 1000:
+            saved += 1
+            continue
         try:
             body = _save_drive_pdf(session, file_id)
             if not body:
-                log.warning("Book %s was not a PDF.", index)
+                log.warning("Book %s was not a PDF. Share the file as Anyone with the link.", index)
                 continue
-            (BOOKS_DIR / name).write_bytes(body)
+            path.write_bytes(body)
             saved += 1
-            log.warning("Saved private book %s (%s bytes).", index, len(body))
+            log.warning("Saved Drive book %s (%s bytes).", index, len(body))
         except Exception as exc:
-            log.warning("Private book %s failed: %s", index, type(exc).__name__)
+            log.warning("Drive book %s failed: %s", index, type(exc).__name__)
     if saved:
         book_agent().refresh()
-        log.warning("Indexed %s private books.", saved)
+        log.warning("Indexed %s Drive books.", saved)
 
 
 threading.Thread(target=_fetch_private_books, daemon=True).start()
