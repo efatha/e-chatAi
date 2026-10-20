@@ -67,7 +67,15 @@ class BookAgent:
         if not self.books:
             logger.warning("No local books were loaded from %s", self.books_dir)
 
+    def ensure(self):
+        """Pick up PDFs another worker downloaded after this process started."""
+        if self.books or not self.books_dir.exists():
+            return
+        if any(self.books_dir.glob("*.pdf")):
+            self.refresh()
+
     def answer(self, message):
+        self.ensure()
         text = (message or "").strip()
         if not text:
             return None
@@ -114,6 +122,7 @@ class BookAgent:
         return [(title, page, snippet) for _score, title, page, snippet in kept]
 
     def excerpts(self, message):
+        self.ensure()
         lines = []
         for title, page, snippet in self._from_each_book(message):
             lines.append(f"• _{title}, p. {page}_: {snippet}")

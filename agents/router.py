@@ -106,6 +106,7 @@ def answer_question(message, username=None, history=None, file=None):
             fallback = f"{username}, {fallback}"
         return {"response": fallback, "source": "independent", "provider": "local"}
 
+    book_agent().ensure()
     if not book_agent().books:
         fallback = (
             "This server has no PDFs in the books folder, so there is no page to cite. "

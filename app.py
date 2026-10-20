@@ -30,29 +30,49 @@ def _drive_file_id(link):
     return ""
 
 
-def _pdf_bytes(body):
-    if not body:
-        return None
+def _pdf_bytes(response):
+    body = response.content or b""
+    if "pdf" in response.headers.get("Content-Type", "").lower() and body[:5] == b"%PDF-":
+        return body
     start = body.find(b"%PDF-")
-    if start < 0 or start > 1024:
+    if 0 <= start <= 2048:
+        return body[start:]
+    return None
+
+
+def _confirm_download(session, response):
+    text = response.content.decode("utf-8", errors="ignore")
+    action = re.search(r'action="([^"]+)"', text)
+    names = re.findall(r'name="([^"]+)"[^>]*value="([^"]*)"', text)
+    if not names:
+        names = [(name, value) for value, name in re.findall(r'value="([^"]*)"[^>]*name="([^"]+)"', text)]
+    if not action or not names:
         return None
-    return body[start:]
+    confirmed = session.get(
+        action.group(1).replace("&amp;", "&"),
+        params=dict(names),
+        timeout=180,
+    )
+    confirmed.raise_for_status()
+    return _pdf_bytes(confirmed)
 
 
 def _save_drive_pdf(session, file_id):
-    """Drive file link. A large file returns a warning page, then one confirm download."""
-    url = f"https://drive.google.com/uc?export=download&id={file_id}"
-    response = session.get(url, timeout=60)
-    response.raise_for_status()
-    pdf = _pdf_bytes(response.content)
-    if pdf:
-        return pdf
-    text = response.content.decode("utf-8", errors="ignore")
-    confirm = re.search(r"confirm=([0-9A-Za-z_\-]+)", text)
-    token = confirm.group(1) if confirm else "t"
-    confirmed = session.get(url + "&confirm=" + token, timeout=180)
-    confirmed.raise_for_status()
-    return _pdf_bytes(confirmed.content)
+    """Anyone-with-the-link file. Large files need the confirm form, not the warning page."""
+    urls = [
+        f"https://drive.usercontent.google.com/download?id={file_id}&export=download&confirm=t",
+        f"https://drive.google.com/uc?export=download&id={file_id}&confirm=t",
+    ]
+    for url in urls:
+        response = session.get(url, timeout=180)
+        response.raise_for_status()
+        pdf = _pdf_bytes(response)
+        if pdf:
+            return pdf
+        pdf = _confirm_download(session, response)
+        if pdf:
+            return pdf
+    return None
 
 
 def _fetch_private_books():
