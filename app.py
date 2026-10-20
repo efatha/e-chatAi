@@ -9,7 +9,6 @@ import json
 from flask import session
 
 from agents.router import answer_question, api_agent, book_agent, configure
-from agents.book_agent import BOOKS_DIR
 
 # Load the data.json file
 with open("data.json", "r", encoding="utf-8") as f:
@@ -30,14 +29,14 @@ def _drive_file_id(link):
     return ""
 
 
-def _pdf_bytes(response):
+def _file_bytes(response):
     body = response.content or b""
-    if "pdf" in response.headers.get("Content-Type", "").lower() and body[:5] == b"%PDF-":
-        return body
-    start = body.find(b"%PDF-")
-    if 0 <= start <= 2048:
-        return body[start:]
-    return None
+    head = body.lstrip()[:15].lower()
+    if head.startswith(b"<!doctype") or head.startswith(b"<html") or head.startswith(b"<head"):
+        return None
+    if len(body) < 100:
+        return None
+    return body
 
 
 def _confirm_download(session, response):
@@ -54,11 +53,11 @@ def _confirm_download(session, response):
         timeout=180,
     )
     confirmed.raise_for_status()
-    return _pdf_bytes(confirmed)
+    return _file_bytes(confirmed)
 
 
-def _save_drive_pdf(session, file_id):
-    """Anyone-with-the-link file. Large files need the confirm form, not the warning page."""
+def _drive_bytes(session, file_id):
+    """Anyone-with-the-link file. A large file needs the confirm form, not the warning page."""
     urls = [
         f"https://drive.usercontent.google.com/download?id={file_id}&export=download&confirm=t",
         f"https://drive.google.com/uc?export=download&id={file_id}&confirm=t",
@@ -66,51 +65,38 @@ def _save_drive_pdf(session, file_id):
     for url in urls:
         response = session.get(url, timeout=180)
         response.raise_for_status()
-        pdf = _pdf_bytes(response)
-        if pdf:
-            return pdf
-        pdf = _confirm_download(session, response)
-        if pdf:
-            return pdf
+        body = _file_bytes(response)
+        if body:
+            return body
+        body = _confirm_download(session, response)
+        if body:
+            return body
     return None
 
 
 def _fetch_private_books():
-    """Download every BOOK_URLS file in the background. The site opens first."""
-    raw = os.getenv("BOOK_URLS", "").replace(",", " ").split()
-    if not raw:
+    """Load the Drive index into memory. Do not save the PDFs on this server."""
+    link = os.getenv("BOOK_INDEX_URL", "").strip()
+    if not link:
         return
     import logging
     import requests
-    from werkzeug.utils import secure_filename
 
     log = logging.getLogger(__name__)
-    BOOKS_DIR.mkdir(parents=True, exist_ok=True)
-    saved = 0
+    file_id = _drive_file_id(link)
+    if not file_id:
+        log.warning("BOOK_INDEX_URL must be a Drive file link, not a folder link.")
+        return
     session = requests.Session()
     session.headers["User-Agent"] = "Mozilla/5.0"
-    for index, link in enumerate(raw, start=1):
-        file_id = _drive_file_id(link)
-        if not file_id:
-            log.warning("Book link %s is a folder or not a Drive file link.", index)
-            continue
-        path = BOOKS_DIR / (secure_filename(f"book-{index}") + ".pdf")
-        if path.is_file() and path.stat().st_size > 1000:
-            saved += 1
-            continue
-        try:
-            body = _save_drive_pdf(session, file_id)
-            if not body:
-                log.warning("Book %s was not a PDF. Share the file as Anyone with the link.", index)
-                continue
-            path.write_bytes(body)
-            saved += 1
-            log.warning("Saved Drive book %s (%s bytes).", index, len(body))
-        except Exception as exc:
-            log.warning("Drive book %s failed: %s", index, type(exc).__name__)
-    if saved:
-        book_agent().refresh()
-        log.warning("Indexed %s Drive books.", saved)
+    try:
+        body = _drive_bytes(session, file_id)
+        if not body or not book_agent().install_index(body):
+            log.warning("BOOK_INDEX_URL did not return the book index. Share the file as Anyone with the link.")
+            return
+        log.warning("Loaded %s books from BOOK_INDEX_URL.", len(book_agent().books))
+    except Exception as exc:
+        log.warning("BOOK_INDEX_URL failed: %s", type(exc).__name__)
 
 
 threading.Thread(target=_fetch_private_books, daemon=True).start()

@@ -67,6 +67,17 @@ class BookAgent:
         if not self.books:
             logger.warning("No local books were loaded from %s", self.books_dir)
 
+    def install_index(self, payload_bytes):
+        """Use a Drive-hosted index. The PDFs stay off this server."""
+        payload = pickle.loads(payload_bytes)
+        books = payload.get("books") if isinstance(payload, dict) else None
+        idf = payload.get("idf") if isinstance(payload, dict) else None
+        if not books or not isinstance(idf, dict):
+            return False
+        self.books = books
+        self._idf = idf
+        return True
+
     def ensure(self):
         """Pick up PDFs another worker downloaded after this process started."""
         if self.books or not self.books_dir.exists():
