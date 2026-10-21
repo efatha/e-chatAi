@@ -6,6 +6,7 @@ committed. More PDFs can be added later; each file becomes another book.
 
 import logging
 import math
+import os
 import pickle
 import re
 from pathlib import Path
@@ -85,9 +86,43 @@ class BookAgent:
         if any(self.books_dir.glob("*.pdf")):
             self.refresh()
 
+    def _open_matching_drive(self, message):
+        """Read one matching Drive PDF in memory. Nothing is written to disk."""
+        if not _drive_ids():
+            return
+        if self.books_dir.exists() and any(self.books_dir.glob("*.pdf")):
+            return
+        names = getattr(self, "_drive_names", None) or _drive_names()
+        self._drive_names = names
+        ranked = sorted(
+            (( _drive_score(message, name), file_id, name) for file_id, name in names.items()),
+            key=lambda item: item[0],
+            reverse=True,
+        )
+        if not ranked or ranked[0][0] < 2:
+            return
+        _score, file_id, name = ranked[0]
+        cache = getattr(self, "_drive_cache", {})
+        book = cache.get(file_id)
+        if book is None:
+            body = _download_drive_pdf(file_id)
+            if not body:
+                logger.warning("Drive book %s was not a PDF.", name)
+                return
+            book = _read_pdf_bytes(body, name)
+            if not book:
+                return
+            cache[file_id] = book
+            self._drive_cache = cache
+            logger.warning("Read %s from Drive into memory.", name)
+        self.books = [book]
+        self._idf = _idf_table(self.books)
+
     def answer(self, message):
         self.ensure()
         text = (message or "").strip()
+        if text and not self.books:
+            self._open_matching_drive(text)
         if not text:
             return None
 
@@ -134,10 +169,84 @@ class BookAgent:
 
     def excerpts(self, message):
         self.ensure()
+        if message and not self.books:
+            self._open_matching_drive(message)
         lines = []
         for title, page, snippet in self._from_each_book(message):
             lines.append(f"• _{title}, p. {page}_: {snippet}")
         return lines
+
+
+def _drive_ids():
+    raw = os.getenv("BOOK_URLS", "").replace(",", " ").split()
+    found = []
+    for link in raw:
+        text = link.strip()
+        if "/folders/" in text:
+            continue
+        if "/file/d/" in text:
+            found.append(text.split("/file/d/", 1)[1].split("/", 1)[0].split("?", 1)[0])
+        elif "id=" in text:
+            found.append(text.split("id=", 1)[1].split("&", 1)[0])
+    return [item for item in found if item]
+
+
+def _drive_names():
+    """File names from the public Drive page. The PDF itself stays on Drive."""
+    import requests
+    names = {}
+    session = requests.Session()
+    session.headers["User-Agent"] = "Mozilla/5.0"
+    for file_id in _drive_ids():
+        try:
+            page = session.get(
+                f"https://drive.google.com/file/d/{file_id}/view",
+                timeout=20,
+            )
+            title = re.search(r"<title>(.*?)</title>", page.text, re.I)
+            label = title.group(1).split(" - Google Drive")[0].strip() if title else ""
+            if label:
+                names[file_id] = label
+        except Exception as exc:
+            logger.warning("Drive name lookup failed: %s", type(exc).__name__)
+    return names
+
+
+def _drive_score(question, filename):
+    question_words = _tokens(question)
+    title = _known_title(Path(filename))
+    spaced = re.sub(r"([a-z])([A-Z])", r"\1 \2", Path(filename).stem)
+    name_words = _tokens(f"{title} {spaced}")
+    score = len(question_words & name_words)
+    key = Path(filename).stem.lower().replace("-", "").replace("_", "").replace(" ", "")
+    if title and any(word in question_words for word in _tokens(title)):
+        if key and any(piece in key for piece in (key,)):
+            score += 3
+    return score
+
+
+def _download_drive_pdf(file_id):
+    import requests
+    session = requests.Session()
+    session.headers["User-Agent"] = "Mozilla/5.0"
+    urls = [
+        f"https://drive.usercontent.google.com/download?id={file_id}&export=download&confirm=t",
+        f"https://drive.google.com/uc?export=download&id={file_id}&confirm=t",
+    ]
+    for url in urls:
+        response = session.get(url, timeout=180)
+        response.raise_for_status()
+        body = response.content or b""
+        if body[:5] == b"%PDF-":
+            return body
+        text = body.decode("utf-8", errors="ignore")
+        action = re.search(r'action="([^"]+)"', text)
+        fields = re.findall(r'name="([^"]+)"[^>]*value="([^"]*)"', text)
+        if action and fields:
+            confirmed = session.get(action.group(1).replace("&amp;", "&"), params=dict(fields), timeout=180)
+            if confirmed.content[:5] == b"%PDF-":
+                return confirmed.content
+    return None
 
 
 def _read_pdf(path):
@@ -164,6 +273,28 @@ def _read_pdf(path):
     except Exception as exc:
         logger.warning("Could not read %s: %s", path.name, type(exc).__name__)
         return None
+
+
+def _read_pdf_bytes(body, name):
+    try:
+        from io import BytesIO
+        from pypdf import PdfReader
+        reader = PdfReader(BytesIO(body))
+    except Exception as exc:
+        logger.warning("Could not read %s from Drive: %s", name, type(exc).__name__)
+        return None
+    path = Path(name)
+    title = _known_title(path) or _display_title(path)
+    chunks = []
+    for index, page in enumerate(reader.pages, start=1):
+        raw = page.extract_text() or ""
+        for piece in _split_page(raw):
+            tokens = _tokens(piece)
+            if len(tokens) >= 8:
+                chunks.append({"text": piece, "page": index, "tokens": tokens})
+    if not chunks:
+        return None
+    return {"title": title, "chunks": chunks}
 
 
 def _split_page(raw):
