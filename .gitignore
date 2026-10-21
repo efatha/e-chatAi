@@ -4,7 +4,9 @@ __pycache__/
 .env
 *.sqlite3
 
-# Local books stay on this machine. The agent reads them; git does not.
+# Book PDFs ship with the repo so Render reads them from GitHub.
+# The search cache is rebuilt on the server.
 *.pdf
 books/*
 !books/.gitkeep
+!books/*.pdf
