@@ -5,8 +5,9 @@ __pycache__/
 *.sqlite3
 
 # Book PDFs ship with the repo so Render reads them from GitHub.
-# The search cache is rebuilt on the server.
+# The index ships too, so startup does not reread every page.
 *.pdf
 books/*
 !books/.gitkeep
 !books/*.pdf
+!books/.index.pkl

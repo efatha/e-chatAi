@@ -8,9 +8,11 @@ import logging
 import math
 import pickle
 import re
+import threading
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+_index_lock = threading.Lock()
 
 BOOKS_DIR = Path(__file__).resolve().parent.parent / "books"
 STOPWORDS = {
@@ -42,30 +44,34 @@ class BookAgent:
         self.books_dir = Path(books_dir)
         self.books = []
         self._idf = {}
-        self.refresh()
+        self._ready = False
 
     def refresh(self):
-        self.books = []
-        self._idf = {}
-        if not self.books_dir.exists():
-            return
-        pdfs = sorted(self.books_dir.glob("*.pdf"))
-        signature = [
-            (path.name, path.stat().st_size)
-            for path in pdfs
-        ]
-        cached = _load_cache(self.books_dir, signature)
-        if cached:
-            self.books, self._idf = cached
-            return
-        for path in pdfs:
-            book = _read_pdf(path)
-            if book and book["chunks"]:
-                self.books.append(book)
-        self._idf = _idf_table(self.books)
-        _save_cache(self.books_dir, signature, self.books, self._idf)
-        if not self.books:
-            logger.warning("No local books were loaded from %s", self.books_dir)
+        with _index_lock:
+            self.books = []
+            self._idf = {}
+            if not self.books_dir.exists():
+                self._ready = True
+                return
+            pdfs = sorted(self.books_dir.glob("*.pdf"))
+            signature = [
+                (path.name, path.stat().st_size)
+                for path in pdfs
+            ]
+            cached = _load_cache(self.books_dir, signature)
+            if cached:
+                self.books, self._idf = cached
+                self._ready = True
+                return
+            for path in pdfs:
+                book = _read_pdf(path)
+                if book and book["chunks"]:
+                    self.books.append(book)
+            self._idf = _idf_table(self.books)
+            _save_cache(self.books_dir, signature, self.books, self._idf)
+            self._ready = True
+            if not self.books:
+                logger.warning("No local books were loaded from %s", self.books_dir)
 
     def ensure(self):
         """Pick up PDFs another worker downloaded after this process started."""

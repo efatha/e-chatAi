@@ -1,18 +1,24 @@
 from flask import Flask, render_template, request, jsonify
 import os
+import threading
 from dotenv import load_dotenv
 
 load_dotenv()  # loads variables from .env
 import json
 from flask import session
 
-from agents.router import answer_question, api_agent, configure
+from agents.router import answer_question, api_agent, book_agent, configure
 
 # Load the data.json file
 with open("data.json", "r", encoding="utf-8") as f:
     DATA = json.load(f)
 
 configure(DATA.get("trained_knowledge", []), DATA.get("word_meanings", {}))
+
+def _index_books():
+    book_agent().refresh()
+
+threading.Thread(target=_index_books, daemon=True).start()
 
 app = Flask(__name__)
 
