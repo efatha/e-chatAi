@@ -480,7 +480,7 @@ def _wikipedia_snippet(query):
     except (requests.RequestException, ValueError):
         return []
     for page in pages.values():
-        extract = re.sub(r"\s+", " ", page.get("extract") or "").strip()
+        extract = _finish_at_stop(re.sub(r"\s+", " ", page.get("extract") or "").strip())
         title = page.get("title") or ""
         if len(extract) > 40:
             return [f"{title}. {extract}"]
@@ -493,8 +493,23 @@ def _clean_snippets(snippets):
         clean = re.sub(r"<[^>]+>", "", raw)
         clean = clean.replace("&amp;", "&").replace("&quot;", '"').replace("&#39;", "'").replace("&#x27;", "'")
         clean = re.sub(r"\s+", " ", clean).strip()
+        clean = _finish_at_stop(clean)
         if len(clean) > 40 and clean not in lines:
             lines.append(clean)
         if len(lines) == 2:
             break
     return lines
+
+
+def _finish_at_stop(text):
+    """End on the last full sentence. Drop a trailing fragment such as 'and ...'."""
+    original = text or ""
+    cut = re.sub(r"(?:\s*(?:\.\.\.|…))+\s*$", "", original).strip()
+    stops = list(re.finditer(r"[.!?]", cut))
+    if stops:
+        return cut[:stops[-1].end()].strip()
+    if re.search(r"(?:\.\.\.|…)\s*$", original):
+        return ""
+    if not cut:
+        return ""
+    return cut.rstrip(" ,;:-") + "."
