@@ -343,32 +343,80 @@ def looks_like_open_question(text):
 
 
 def search_result_text(question):
-    """Copy the first public search snippet. Google's page needs a browser script."""
+    """First readable public snippet. Google's own page does not include the text."""
     query = re.sub(r"\s+", " ", (question or "")).strip()
     if not query:
         return None
+    lines = _duckduckgo_snippets(query) or _wikipedia_snippet(query)
+    if not lines:
+        return None
+    return "Search result:\n" + "\n".join(lines[:2])
+
+
+def _duckduckgo_snippets(query):
     try:
         response = requests.post(
             "https://html.duckduckgo.com/html/",
             data={"q": query[:300]},
-            headers={"User-Agent": "Mozilla/5.0"},
-            timeout=12,
+            headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "Accept-Language": "en-US,en;q=0.9",
+            },
+            timeout=8,
         )
         response.raise_for_status()
     except requests.RequestException:
-        return None
+        return []
     snippets = re.findall(r'class="result__snippet"[^>]*>(.*?)</(?:a|td)>', response.text, re.S)
+    return _clean_snippets(snippets)
+
+
+def _wikipedia_snippet(query):
+    """Works from a hosted server when the search page is blocked."""
+    words = [
+        word for word in re.findall(r"[A-Za-z]{4,}", query)
+        if word.lower() not in {
+            "imagine", "suppose", "what", "think", "would", "your", "opinion",
+            "then", "have", "with", "this", "that", "from", "about", "should",
+        }
+    ]
+    topic = " ".join(words[:6]) or query
+    try:
+        response = requests.get(
+            "https://en.wikipedia.org/w/api.php",
+            params={
+                "action": "query",
+                "generator": "search",
+                "gsrsearch": topic,
+                "gsrlimit": 1,
+                "prop": "extracts",
+                "exintro": 1,
+                "explaintext": 1,
+                "format": "json",
+            },
+            headers={"User-Agent": WIKI_USER_AGENT},
+            timeout=8,
+        )
+        response.raise_for_status()
+        pages = (response.json().get("query") or {}).get("pages") or {}
+    except (requests.RequestException, ValueError):
+        return []
+    for page in pages.values():
+        extract = re.sub(r"\s+", " ", page.get("extract") or "").strip()
+        title = page.get("title") or ""
+        if len(extract) > 40:
+            return [f"{title}. {extract}"]
+    return []
+
+
+def _clean_snippets(snippets):
     lines = []
     for raw in snippets:
         clean = re.sub(r"<[^>]+>", "", raw)
-        clean = re.sub(r"&amp;", "&", clean)
-        clean = re.sub(r"&quot;", '"', clean)
-        clean = re.sub(r"&#x27;|&#39;", "'", clean)
+        clean = clean.replace("&amp;", "&").replace("&quot;", '"').replace("&#39;", "'")
         clean = re.sub(r"\s+", " ", clean).strip()
         if len(clean) > 40 and clean not in lines:
             lines.append(clean)
         if len(lines) == 2:
             break
-    if not lines:
-        return None
-    return "Search result:\n" + "\n".join(lines)
+    return lines
