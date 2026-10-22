@@ -323,7 +323,52 @@ def _usable_term(term):
 
 
 def _trim(text, limit):
-    if len(text) <= limit:
-        return text
+    if not text or len(text) <= limit:
+        return text or ""
     cut = text[:limit].rsplit(" ", 1)[0].rstrip(" ,;:")
     return cut + "..."
+
+
+def looks_like_open_question(text):
+    """An opinion or imagined situation, after the books have nothing to cite."""
+    lowered = (text or "").lower()
+    marks = (
+        "what do you think",
+        "imagine ",
+        "suppose ",
+        "what would you",
+        "in your opinion",
+    )
+    return any(mark in lowered for mark in marks)
+
+
+def search_result_text(question):
+    """Copy the first public search snippet. Google's page needs a browser script."""
+    query = re.sub(r"\s+", " ", (question or "")).strip()
+    if not query:
+        return None
+    try:
+        response = requests.post(
+            "https://html.duckduckgo.com/html/",
+            data={"q": query[:300]},
+            headers={"User-Agent": "Mozilla/5.0"},
+            timeout=12,
+        )
+        response.raise_for_status()
+    except requests.RequestException:
+        return None
+    snippets = re.findall(r'class="result__snippet"[^>]*>(.*?)</(?:a|td)>', response.text, re.S)
+    lines = []
+    for raw in snippets:
+        clean = re.sub(r"<[^>]+>", "", raw)
+        clean = re.sub(r"&amp;", "&", clean)
+        clean = re.sub(r"&quot;", '"', clean)
+        clean = re.sub(r"&#x27;|&#39;", "'", clean)
+        clean = re.sub(r"\s+", " ", clean).strip()
+        if len(clean) > 40 and clean not in lines:
+            lines.append(clean)
+        if len(lines) == 2:
+            break
+    if not lines:
+        return None
+    return "Search result:\n" + "\n".join(lines)

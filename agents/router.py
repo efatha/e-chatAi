@@ -4,6 +4,7 @@ from agents.api_agent import ApiAgent
 from agents.independent_agent import IndependentAgent
 from agents.book_agent import BookAgent, looks_like_reasoning
 from agents.knowledge_agent import detect_lookup, lookup_answer, ollama_answer
+from agents.knowledge_agent import looks_like_open_question, search_result_text
 from agents.knowledge_agent import wikipedia_summary
 from agents.reasoning_patterns import concept_terms, pattern_answer
 
@@ -121,6 +122,10 @@ def answer_question(message, username=None, history=None, file=None):
         meaning = independent.fallback(text, username, history)
         if meaning and "still learning" not in meaning.lower():
             fallback = meaning
+    if text and looks_like_open_question(text):
+        found = search_result_text(text)
+        if found:
+            return {"response": _with_name(found, username), "source": "search", "provider": "web"}
     return {"response": fallback, "source": "independent", "provider": "local"}
 
 
