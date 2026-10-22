@@ -343,43 +343,81 @@ def looks_like_open_question(text):
 
 
 def search_result_text(question):
-    """First readable public snippet. Google's own page does not include the text."""
+    """Prefer the same public snippets used offline. Keep a hit only when it matches the question."""
     query = re.sub(r"\s+", " ", (question or "")).strip()
     if not query:
         return None
-    lines = _duckduckgo_snippets(query) or _wikipedia_snippet(query)
+    wanted = _question_words(query)
+    lines = _matching(_duckduckgo_snippets(query), wanted)
+    if not lines:
+        lines = _matching(_wikipedia_snippet(query), wanted, minimum=3)
     if not lines:
         return None
     return "Search result:\n" + "\n".join(lines[:2])
 
 
+def _question_words(query):
+    skip = {
+        "imagine", "suppose", "what", "think", "would", "your", "opinion",
+        "then", "have", "with", "this", "that", "from", "about", "should",
+        "does", "they", "them", "into", "when", "where", "which",
+    }
+    return [
+        word.lower()
+        for word in re.findall(r"[A-Za-z]{4,}", query)
+        if word.lower() not in skip
+    ]
+
+
+def _word_hits(text, words):
+    lowered = (text or "").lower()
+    hits = 0
+    for word in words:
+        if re.search(rf"\b{re.escape(word)}s?\b", lowered):
+            hits += 1
+    return hits
+
+
+def _matching(lines, words, minimum=2):
+    kept = []
+    for line in lines or []:
+        if words and _word_hits(line, words) >= minimum:
+            kept.append(line)
+        if len(kept) == 2:
+            break
+    return kept
+
+
 def _duckduckgo_snippets(query):
-    try:
-        response = requests.post(
-            "https://html.duckduckgo.com/html/",
-            data={"q": query[:300]},
-            headers={
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                "Accept-Language": "en-US,en;q=0.9",
-            },
-            timeout=8,
-        )
-        response.raise_for_status()
-    except requests.RequestException:
-        return []
-    snippets = re.findall(r'class="result__snippet"[^>]*>(.*?)</(?:a|td)>', response.text, re.S)
-    return _clean_snippets(snippets)
+    headers = {
+        "User-Agent": "Mozilla/5.0",
+        "Accept": "text/html",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+    attempts = (
+        ("post", "https://html.duckduckgo.com/html/", {"q": query[:300]}),
+        ("get", "https://html.duckduckgo.com/html/", {"q": query[:300]}),
+        ("get", "https://duckduckgo.com/html/", {"q": query[:300]}),
+    )
+    for method, url, params in attempts:
+        try:
+            if method == "post":
+                response = requests.post(url, data=params, headers=headers, timeout=8)
+            else:
+                response = requests.get(url, params=params, headers=headers, timeout=8)
+            response.raise_for_status()
+        except requests.RequestException:
+            continue
+        snippets = re.findall(r'result__snippet"[^>]*>(.*?)</a>', response.text, re.S)
+        lines = _clean_snippets(snippets)
+        if lines:
+            return lines
+    return []
 
 
 def _wikipedia_snippet(query):
     """Works from a hosted server when the search page is blocked."""
-    words = [
-        word for word in re.findall(r"[A-Za-z]{4,}", query)
-        if word.lower() not in {
-            "imagine", "suppose", "what", "think", "would", "your", "opinion",
-            "then", "have", "with", "this", "that", "from", "about", "should",
-        }
-    ]
+    words = _question_words(query)
     topic = " ".join(words[:6]) or query
     try:
         response = requests.get(
@@ -413,7 +451,7 @@ def _clean_snippets(snippets):
     lines = []
     for raw in snippets:
         clean = re.sub(r"<[^>]+>", "", raw)
-        clean = clean.replace("&amp;", "&").replace("&quot;", '"').replace("&#39;", "'")
+        clean = clean.replace("&amp;", "&").replace("&quot;", '"').replace("&#39;", "'").replace("&#x27;", "'")
         clean = re.sub(r"\s+", " ", clean).strip()
         if len(clean) > 40 and clean not in lines:
             lines.append(clean)
