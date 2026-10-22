@@ -348,12 +348,39 @@ def search_result_text(question):
     if not query:
         return None
     wanted = _question_words(query)
-    lines = _matching(_duckduckgo_snippets(query), wanted)
+    found = _duckduckgo_snippets(query)
+    lines = _matching(found, wanted) or found[:2]
     if not lines:
-        lines = _matching(_wikipedia_snippet(query), wanted, minimum=3)
+        content = [word for word in wanted if word not in _NUMBER_WORDS and not word.isdigit()]
+        lines = _matching(_wikipedia_snippet(query), content, minimum=2)
     if not lines:
         return None
     return "Search result:\n" + "\n".join(lines[:2])
+
+
+_NUMBER_WORDS = {
+    "one": "1", "two": "2", "three": "3", "four": "4", "five": "5",
+    "six": "6", "seven": "7", "eight": "8", "nine": "9", "ten": "10",
+}
+
+
+def _forms(word):
+    forms = [word]
+    if word in _NUMBER_WORDS:
+        forms.append(_NUMBER_WORDS[word])
+    for name, digit in _NUMBER_WORDS.items():
+        if word == digit:
+            forms.append(name)
+    return forms
+
+
+def _word_hits(text, words):
+    lowered = (text or "").lower()
+    hits = 0
+    for word in words:
+        if any(re.search(rf"\b{re.escape(form)}s?\b", lowered) for form in _forms(word)):
+            hits += 1
+    return hits
 
 
 def _question_words(query):
@@ -362,11 +389,13 @@ def _question_words(query):
         "then", "have", "with", "this", "that", "from", "about", "should",
         "does", "they", "them", "into", "when", "where", "which",
     }
-    return [
-        word.lower()
-        for word in re.findall(r"[A-Za-z]{4,}", query)
-        if word.lower() not in skip
-    ]
+    words = []
+    for word in re.findall(r"[A-Za-z0-9]+", (query or "").lower()):
+        if word in skip:
+            continue
+        if word.isdigit() or word in _NUMBER_WORDS or len(word) >= 4:
+            words.append(word)
+    return words
 
 
 def _word_hits(text, words):
@@ -379,9 +408,20 @@ def _word_hits(text, words):
 
 
 def _matching(lines, words, minimum=2):
-    kept = []
+    """Rank by the question's own words, especially a changed number."""
+    numbers = [word for word in words if word.isdigit() or word in _NUMBER_WORDS]
+    ranked = []
     for line in lines or []:
-        if words and _word_hits(line, words) >= minimum:
+        hits = _word_hits(line, words)
+        number_hits = _word_hits(line, numbers) if numbers else 0
+        if hits >= minimum or number_hits:
+            ranked.append((number_hits, hits, line))
+    if numbers and any(item[0] for item in ranked):
+        ranked = [item for item in ranked if item[0]]
+    ranked.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    kept = []
+    for _numbers, _hits, line in ranked:
+        if line not in kept:
             kept.append(line)
         if len(kept) == 2:
             break
