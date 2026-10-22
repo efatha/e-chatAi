@@ -88,10 +88,11 @@ class BookAgent:
 
         habit = _proof_habit(text)
         passages = self._from_each_book(text)
-        if not passages and not habit:
+        response = _speak(text, habit, passages)
+        if not response:
             return None
         return {
-            "response": _speak(text, habit, passages),
+            "response": response,
             "source": "book",
             "provider": "both-books",
         }
@@ -216,75 +217,74 @@ def _clip(text, limit=240):
     return snippet[:limit].rsplit(" ", 1)[0] + "..."
 
 
-def _rephrase(text):
-    """Say the question back once, in a form that can be answered."""
-    body = re.sub(r"\s+", " ", text or "").strip(" ?.!")
-    body = re.sub(
-        r"^(?:please\s+)?(?:can you\s+|could you\s+|would you\s+)?(?:explain\s+|tell me\s+)?",
-        "",
-        body,
-        flags=re.IGNORECASE,
-    ).strip()
-    if not body:
-        return "Restated once: say the claim you want checked."
-    sentence = body[0].upper() + body[1:]
-    if not sentence.endswith("."):
-        sentence += "."
-    return f"Restated once: {sentence}"
+def _clauses(text):
+    """Pull P and Q out of 'if P then Q' or 'if P, Q'."""
+    body = re.sub(r"\s+", " ", text or "").strip()
+    match = re.search(r"\bif\s+(.+?)\s+then\s+(.+)$", body, re.I)
+    if not match:
+        match = re.search(r"\bif\s+([^,]+),\s*(?:then\s+)?(.+)$", body, re.I)
+    if not match:
+        return None
+    premise = match.group(1).strip(" .?:")
+    conclusion = re.sub(r"\s+(true|false)$", "", match.group(2).strip(" .?:"), flags=re.I)
+    premise = re.sub(r"^.*\bof\s+", "", premise, flags=re.I).strip()
+    if not premise or not conclusion:
+        return None
+    return premise, conclusion
 
 
-def _logic_line(text):
-    """A definition or a symbol form, only when the question names that idea."""
-    lowered = (text or "").lower()
-    forms = (
-        ("contrapositive", "Definition. The contrapositive of P → Q is ¬Q → ¬P. They are the same claim: (P → Q) ↔ (¬Q → ¬P)."),
-        ("converse", "Definition. The converse of P → Q is Q → P. It is a different claim."),
-        ("if and only if", "Definition. P ↔ Q means (P → Q) ∧ (Q → P)."),
-        ("biconditional", "Definition. P ↔ Q means (P → Q) ∧ (Q → P)."),
-        ("contradiction", "Definition. A proof by contradiction assumes the denial of the goal and derives ⊥."),
-        ("induction", "Definition. Induction: prove P(0), then ∀k (P(k) → P(k+1)), hence ∀n P(n)."),
-        ("posterior", "Definition. The posterior is P(A|B) = P(B|A) P(A) / P(B). P(A) is the prior."),
-        ("prior", "Definition. The prior is P(A), the belief before the evidence B. The posterior is P(A|B)."),
-        ("likelihood", "Definition. The likelihood of a hypothesis A given evidence B is P(B|A)."),
-        ("subspace", "Definition. A subspace is closed under addition and scalar multiplication, so it contains 0."),
-        ("basis", "Definition. A basis of V is a linearly independent list that spans V."),
-        ("span", "Definition. span(v₁,…,vₙ) = {a₁v₁ + … + aₙvₙ}."),
-        ("eigen", "Definition. A v = λ v, with v ≠ 0. λ is an eigenvalue and v is an eigenvector."),
-        ("convex", "Definition. C is convex when ∀x,y ∈ C and ∀t ∈ [0,1], t x + (1−t) y ∈ C."),
-        ("variance", "Definition. Variance is the expected squared distance from the mean: Var(X) = E[(X − E[X])²]."),
-        ("confidence interval", "Definition. A confidence interval is a range computed from the sample that is claimed to cover the population parameter in a stated fraction of repeated samples."),
-        ("priority", "Definition. In a statistics question, priority is read as probability: a number from 0 to 1 for how often an outcome happens over many repetitions."),
-        ("probability", "Definition. A probability is a number from 0 to 1 for how often an outcome happens over many repetitions."),
-    )
-    for needle, line in forms:
-        if re.search(rf"\b{re.escape(needle)}\b", lowered):
-            return line
-    return ""
+def _deny(clause):
+    words = clause.strip()
+    if words.lower().startswith("not "):
+        return words[4:]
+    return "not " + words
+
+
+def _page_supports(snippet, conclusion, anchors):
+    """A page stays only when it carries the conclusion, not one nearby word."""
+    words = [word for word in _tokens(conclusion) if len(word) >= 4]
+    lowered = (snippet or "").lower()
+    hits = sum(1 for word in words if word in lowered)
+    if hits < 2:
+        return False
+    if anchors and not any(anchor in lowered for anchor in anchors):
+        return False
+    return True
 
 
 def _speak(text, habit, passages):
-    lines = [_rephrase(text), ""]
-    logic = _logic_line(text)
-    if logic:
-        lines.append(logic)
-        lines.append("")
+    """The reply is the derived argument, plus a page only when that page states it."""
+    conclusion = habit or text
+    anchors = _page_anchors(text)
+    kept = [
+        item for item in passages
+        if _page_supports(item[2], conclusion, anchors)
+    ]
+    lines = []
     if habit:
         lines.append(habit)
-    elif passages:
-        lines.append("I am answering from the page that uses these words, then saying what that page commits me to.")
-    else:
-        lines.append("I will treat this as a claim to be proved, not a guess.")
-    if passages:
-        lines.append("")
-        lines.append("Reference.")
-        for title, page, snippet in passages:
+    if kept:
+        lines.append("From the books:")
+        for title, page, snippet in kept:
             lines.append(f"• _{title}, p. {page}_: {snippet}")
-    lines.append("")
-    lines.append(
-        "In ordinary speech: the restatement is the claim, the definition is the rule, "
-        "and the page is the place I took the words from."
-    )
-    return "\n".join(lines).strip()
+    return "\n\n".join(lines).strip()
+
+
+def _page_anchors(text):
+    lowered = (text or "").lower()
+    if "contrapositive" in lowered:
+        return ("contrapositive",)
+    if "converse" in lowered:
+        return ("converse",)
+    if "subspace" in lowered or "zero vector" in lowered:
+        return ("closed", "scalar")
+    if "subset" in lowered:
+        return ("subset",)
+    if "even" in lowered and re.search(r"\b(prove|show that)\b", lowered):
+        return ("even", "sum")
+    if "priority" in lowered or "statistic" in lowered:
+        return ("probability", "statistic")
+    return ()
 
 
 def _on_topic(message, title, text):
@@ -438,15 +438,36 @@ def _proof_habit(text):
             "So the denial of 'every integer is even' is 'some integer is not even', and one odd witness settles it."
         )
     if "contrapositive" in lowered:
+        parts = _clauses(text)
+        if parts:
+            premise, conclusion = parts
+            return (
+                f"Rule: contrapositive. P is \"{premise}\". Q is \"{conclusion}\".\n"
+                f"The contrapositive is ¬Q → ¬P: if {_deny(conclusion)}, then {_deny(premise)}.\n"
+                f"(P → Q) ↔ (¬Q → ¬P). The converse, if {conclusion}, then {premise}, is a different claim."
+            )
         return (
-            "Given P → Q. The contrapositive is ¬Q → ¬P, and (P → Q) ↔ (¬Q → ¬P).\n"
-            "Example: (4 | n) → Even(n). Contrapositive: ¬Even(n) → ¬(4 | n).\n"
-            "The converse Q → P is a different claim. Even(n) → (4 | n) is false, since n = 2 is a counterexample."
+            "Rule: contrapositive. Given P → Q, the contrapositive is ¬Q → ¬P, "
+            "and (P → Q) ↔ (¬Q → ¬P). The converse Q → P is a different claim."
         )
     if "converse" in lowered:
+        parts = _clauses(text)
+        if parts:
+            premise, conclusion = parts
+            even_square = "even" in premise.lower() and "even" in conclusion.lower() and "square" in conclusion.lower()
+            verdict = (
+                "This converse is true: if n is odd then n squared is odd, so n squared even forces n even."
+                if even_square else
+                "The original implication does not decide this converse."
+            )
+            return (
+                f"Rule: converse. P is \"{premise}\". Q is \"{conclusion}\".\n"
+                f"The converse is Q → P: if {conclusion}, then {premise}.\n"
+                f"{verdict}"
+            )
         return (
-            "The converse of P → Q is Q → P. They are not equivalent.\n"
-            "(4 | n) → Even(n) is true. Even(n) → (4 | n) is false: n = 2 is even and 4 does not divide 2."
+            "Rule: converse. The converse of P → Q is Q → P. "
+            "They are different claims, so the original implication does not prove the converse."
         )
     if "if and only if" in lowered or re.search(r"\biff\b", lowered) or "↔" in text or "<->" in lowered:
         return (
@@ -473,11 +494,21 @@ def _proof_habit(text):
             "For Σ_{i=1}^{n} i = n(n+1)/2, P(1) is 1 = 1. "
             "If the sum to k equals k(k+1)/2, the sum to k+1 equals that plus (k+1) = (k+1)(k+2)/2. ∴ P(k+1)."
         )
-    if "subset" in lowered or "∈" in text or "⊆" in text:
+    if "subspace" in lowered and ("zero" in lowered or "0" in lowered):
         return (
-            "x ∈ A means x is a member of A. A ⊆ B means ∀x (x ∈ A → x ∈ B).\n"
+            "Take any vector v in the subspace. "
+            "If the subspace is closed under scalar multiplication, then 0·v is in it. "
+            "0·v is the zero vector, so the subspace contains 0."
+        )
+    if "subset" in lowered or "∈" in text or "⊆" in text:
+        example = ""
+        if "example" in lowered:
+            example = " Example: {1} ⊆ {1, 2}, because the only member of {1} is also a member of {1, 2}."
+        return (
+            "Rule: subset. x ∈ A means x is a member of A. A ⊆ B means ∀x (x ∈ A → x ∈ B).\n"
             "To prove A ⊆ B, let x be arbitrary, assume x ∈ A, and show x ∈ B. "
             "A = B means (A ⊆ B) ∧ (B ⊆ A)."
+            + example
         )
     if "for all" in lowered or "there exists" in lowered or "quantif" in lowered or "∀" in text or "∃" in text:
         return (
@@ -488,6 +519,7 @@ def _proof_habit(text):
     if re.search(r"\b(prove|show that)\b", lowered) and "even" in lowered:
         return (
             "Definition: Even(n) ↔ ∃k ∈ Z (n = 2k).\n"
+            "Rule: direct proof. P is Even(a) and Even(b). Q is Even(a+b).\n"
             "Given Even(a) ∧ Even(b). Then a = 2m and b = 2n, so a + b = 2(m+n). "
             "m+n ∈ Z, hence Even(a+b). ∴ the sum of two even integers is even."
         )
