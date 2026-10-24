@@ -130,6 +130,91 @@ def dictionary_entry(term):
         return None
 
 
+def word_reference(word):
+    """A definition plus a Wikipedia article, skipping a bare disambiguation page."""
+    term = (word or "").strip().lower()
+    if not term or " " in term:
+        return None
+    definition = dictionary_entry(term) or _wiktionary_definition(term)
+    wiki = wikipedia_summary(term, term)
+    if not wiki or "may refer to" in wiki.lower():
+        title = _disambiguation_target(term)
+        if title:
+            better = wikipedia_summary(title, title)
+            if better and "may refer to" not in better.lower():
+                wiki = better
+    parts = [part for part in (definition, wiki) if part]
+    return "\n\n".join(parts) if parts else None
+
+
+def _wiktionary_definition(word):
+    try:
+        response = requests.get(
+            "https://en.wiktionary.org/api/rest_v1/page/definition/" + requests.utils.quote(word),
+            headers={"User-Agent": WIKI_USER_AGENT},
+            timeout=6,
+        )
+        if not response.ok:
+            return None
+        lines = [f"📖 {word}"]
+        count = 0
+        for block in (response.json() or {}).get("en") or []:
+            part = block.get("partOfSpeech") or ""
+            for item in block.get("definitions") or []:
+                count += 1
+                if count > 2:
+                    break
+                text = re.sub(r"<[^>]+>", "", item.get("definition") or "")
+                text = re.sub(r"\s+", " ", text).strip()
+                if text:
+                    label = f"{count}. ({part}) " if part else f"{count}. "
+                    lines.append(label + text)
+            if count > 2:
+                break
+        if count == 0:
+            return None
+        return "\n".join(lines)
+    except requests.RequestException as exc:
+        logger.warning("Wiktionary request failed: %s", type(exc).__name__)
+        return None
+
+
+def _disambiguation_target(word):
+    try:
+        response = requests.get(
+            "https://en.wikipedia.org/w/api.php",
+            params={
+                "action": "query",
+                "prop": "extracts",
+                "explaintext": 1,
+                "exchars": 600,
+                "titles": word,
+                "format": "json",
+                "redirects": 1,
+            },
+            headers={"User-Agent": WIKI_USER_AGENT},
+            timeout=8,
+        )
+        if not response.ok:
+            return None
+        pages = (response.json().get("query") or {}).get("pages") or {}
+        text = ""
+        for page in pages.values():
+            text = page.get("extract") or ""
+        if "may refer to" not in text.lower():
+            return None
+        for line in text.splitlines():
+            line = line.strip()
+            if not line or line.startswith("=") or "may refer to" in line.lower():
+                continue
+            title = line.split(",")[0].strip()
+            if title and title.lower() != word.lower():
+                return title
+    except requests.RequestException as exc:
+        logger.warning("Wikipedia disambiguation lookup failed: %s", type(exc).__name__)
+    return None
+
+
 def wikipedia_summary(term, question=""):
     try:
         import wikipediaapi

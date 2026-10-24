@@ -1,9 +1,12 @@
 """Chooses a local answer, then dictionary/Wikipedia/Ollama, then an external API."""
 
+import re
+
 from agents.api_agent import ApiAgent
-from agents.independent_agent import IndependentAgent
+from agents.independent_agent import IndependentAgent, uncertain_subject
 from agents.book_agent import BookAgent, looks_like_reasoning
 from agents.knowledge_agent import detect_lookup, lookup_answer, ollama_answer
+from agents.knowledge_agent import word_reference
 from agents.knowledge_agent import looks_like_open_question, search_result_text
 from agents.knowledge_agent import wikipedia_summary
 from agents.reasoning_patterns import concept_terms, pattern_answer
@@ -31,6 +34,32 @@ def api_agent():
     return _api_agent or ApiAgent()
 
 
+_AFFIRM = re.compile(
+    r"^(?:yes|yeah|yep|sure|absolutely|ok|okay|of course)(?:\s+please)?[.!]*$",
+    re.IGNORECASE,
+)
+
+
+def _accepted_definition(text, history, independent):
+    """After the unsure offer, yes/sure/yeah loads the dictionary and Wikipedia."""
+    if independent is None or not _AFFIRM.match((text or "").strip()):
+        return None
+    earlier = [str(item).strip() for item in history[:-1] if str(item).strip()]
+    if not earlier:
+        return None
+    word = uncertain_subject(
+        earlier[-1],
+        independent.trained_knowledge,
+        independent.word_meanings,
+    )
+    if not word:
+        return None
+    found = word_reference(word)
+    if not found:
+        return f"I could not find a definition for {word}."
+    return found
+
+
 def answer_question(message, username=None, history=None, file=None):
     """
     Math, greetings, and trained facts stay local.
@@ -43,6 +72,15 @@ def answer_question(message, username=None, history=None, file=None):
     history = history or []
     has_file = bool(file and file.get("data"))
     text = (message or "").strip()
+
+    if text and not has_file:
+        accepted = _accepted_definition(text, history, independent)
+        if accepted:
+            return {
+                "response": _with_name(accepted, username),
+                "source": "knowledge",
+                "provider": "dictionary+wikipedia",
+            }
 
     if text and not has_file and independent is not None:
         local = independent.confident_answer(text, username, history)

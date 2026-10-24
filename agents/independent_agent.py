@@ -275,6 +275,116 @@ def _code_reply(text):
     return f"{intro}\n\n```{language}\n{body}\n```"
 
 
+def _known_fact(phrase, trained_knowledge, word_meanings):
+    """A stored meaning or trained reply that actually names this subject."""
+    phrase = re.sub(r"[?.!,]", " ", phrase or "").strip().lower()
+    if not phrase:
+        return None
+    if phrase in word_meanings:
+        return word_meanings[phrase]
+    for key in sorted(word_meanings, key=len, reverse=True):
+        if key and re.search(rf"\b{re.escape(key)}\b", phrase):
+            return word_meanings[key]
+    for item in trained_knowledge or []:
+        for keyword in item.get("keywords", []):
+            if keyword and re.search(rf"\b{re.escape(keyword)}\b", phrase):
+                return item.get("response")
+    return None
+
+
+_SUBJECT_SKIP = {
+    "is", "are", "do", "does", "did", "was", "were", "the", "a", "an", "to", "for",
+    "of", "in", "on", "my", "your", "i", "me", "it", "good", "bad", "useful",
+    "important", "hard", "easy", "better", "well", "really", "very", "so", "about",
+}
+
+
+def subject_word(phrase):
+    words = re.findall(r"[a-z]+", (phrase or "").lower())
+    content = [word for word in words if word not in _SUBJECT_SKIP and len(word) > 1]
+    return content[-1] if content else None
+
+
+def uncertain_subject(message, trained_knowledge, word_meanings):
+    """The word offered when memory cannot answer a how, why, or do-you-know question."""
+    lowered = re.sub(r"\s+", " ", (message or "").lower()).strip()
+    if re.search(r"\b(prove|proof|induction|contrapositive|contradiction|subset|statistic)\b", lowered):
+        return None
+
+    known = re.match(
+        r"^(?:do you know(?: about)?|have you heard of)\s+(.+?)\s*[?.!]*$",
+        lowered,
+    )
+    if known and not _known_fact(known.group(1), trained_knowledge, word_meanings):
+        return subject_word(known.group(1))
+
+    why = re.match(
+        r"^why(?:\s+(?:is|are|do|does|did|was|were))?\s+(.+?)\s*[?.!]*$",
+        lowered,
+    )
+    if why and not _known_fact(why.group(1), trained_knowledge, word_meanings):
+        return subject_word(why.group(1))
+
+    how = re.match(
+        r"^how (?:can|do|could|should|would) i\s+(.+?)\s*[?.!]*$",
+        lowered,
+    )
+    if how and not _known_fact(how.group(1), trained_knowledge, word_meanings):
+        return subject_word(how.group(1))
+    return None
+
+
+def _offer(word):
+    if not word:
+        return "I’m not sure about that yet. Let’s check a reliable source together."
+    return f"I’m not sure about that yet. Let’s check a reliable source together.\n_`Would you like to know what {word} means?`_"
+
+
+def _wh_reply(message, trained_knowledge, word_meanings):
+    """Answer the question's shape from memory. Unknown stays an honest no or not sure."""
+    lowered = re.sub(r"\s+", " ", (message or "").lower()).strip()
+    if re.search(r"\b(prove|proof|induction|contrapositive|contradiction|subset|statistic)\b", lowered):
+        return None
+
+    known = re.match(
+        r"^(?:do you know(?: about)?|have you heard of)\s+(.+?)\s*[?.!]*$",
+        lowered,
+    )
+    if known:
+        fact = _known_fact(known.group(1), trained_knowledge, word_meanings)
+        if fact:
+            return f"Yes, I know. {fact}"
+        return _offer(subject_word(known.group(1)))
+
+    why = re.match(
+        r"^why(?:\s+(?:is|are|do|does|did|was|were))?\s+(.+?)\s*[?.!]*$",
+        lowered,
+    )
+    if why:
+        fact = _known_fact(why.group(1), trained_knowledge, word_meanings)
+        if fact:
+            return f"Because {fact[0].lower()}{fact[1:]}"
+        return _offer(subject_word(why.group(1)))
+
+    how = re.match(
+        r"^how (?:can|do|could|should|would) i\s+(.+?)\s*[?.!]*$",
+        lowered,
+    )
+    if how:
+        action = how.group(1).strip()
+        fact = _known_fact(action, trained_knowledge, word_meanings)
+        if fact:
+            return f"You can {action} by using this: {fact}"
+        return _offer(subject_word(action))
+
+    what = re.match(r"^what(?:'s| is)\s+([a-z][\w ]*?)\s*[?.!]*$", lowered)
+    if what and not lowered[what.end():].strip():
+        fact = word_meanings.get(what.group(1).strip())
+        if fact:
+            return fact
+    return None
+
+
 def _lookup_word(message, word_meanings):
     message_lower = message.lower()
     for pattern in MEANING_PATTERNS:
@@ -356,6 +466,10 @@ class IndependentAgent:
             if username:
                 return f"😊 Your name is {username}, right?"
             return "I don't know your name yet."
+
+        shaped = _wh_reply(text, self.trained_knowledge, self.word_meanings)
+        if shaped:
+            return _personalize(shaped, username)
 
         for item in self.trained_knowledge:
             if any(keyword in lowered for keyword in item.get("keywords", [])):
