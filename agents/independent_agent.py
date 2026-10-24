@@ -62,6 +62,7 @@ def _phrase_to_expr(phrase):
     text = phrase.lower().strip(" ?.!")
     text = text.replace("divided by", "/")
     text = text.replace("to the power", "**")
+    text = text.replace("×", "*")
     replacements = (
         ("plus", "+"),
         ("added to", "+"),
@@ -72,7 +73,9 @@ def _phrase_to_expr(phrase):
     )
     for word, symbol in replacements:
         text = re.sub(rf"\b{word}\b", symbol, text)
-    text = re.sub(r"[^0-9+\-*/().\s*]", "", text)
+    # 3x5 and 3 x 5 are multiplication. The letter is not part of the number 35.
+    text = re.sub(r"(?<=\d)\s*[x×]\s*(?=\d)", "*", text)
+    text = re.sub(r"[^0-9+\-*/().\s]", "", text)
     text = re.sub(r"\s+", "", text)
     if not text or not re.search(r"\d", text):
         return None
@@ -178,6 +181,35 @@ def _unknown_number(text):
     if kind == "add":
         return f"({total})-({factor})", f"n + {factor} = {total}, so n = {total} - {factor}"
     return f"({total})+({factor})", f"n - {factor} = {total}, so n = {total} + {factor}"
+
+
+def _pretty_expr(expr):
+    text = expr.replace("**", " ^ ")
+    text = text.replace("*", " × ")
+    text = text.replace("/", " ÷ ")
+    text = text.replace("+", " + ")
+    text = re.sub(r"(?<=[\d)])-", " − ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _explain_arithmetic(expr, result):
+    """Show ordinary precedence: × and ÷ before + and −, then left to right."""
+    pretty = _pretty_expr(expr)
+    shown = _show_number(result)
+    product = re.search(r"(\d+(?:\.\d+)?)([*/])(\d+(?:\.\d+)?)", expr)
+    if product and re.search(r"[+\-]", expr.replace("**", "")):
+        left, op, right = product.group(1), product.group(2), product.group(3)
+        piece = float(left) * float(right) if op == "*" else float(left) / float(right)
+        piece_text = _show_number(piece)
+        reduced = expr[:product.start()] + piece_text + expr[product.end():]
+        sign = "×" if op == "*" else "÷"
+        return (
+            f"I read that as {pretty}. "
+            f"Multiplication and division come before addition and subtraction, "
+            f"so {left} {sign} {right} = {piece_text}. "
+            f"Then {_pretty_expr(reduced)} = {shown}."
+        )
+    return f"I read that as {pretty}. {pretty} = {shown}."
 
 
 def _show_number(result):
@@ -430,10 +462,13 @@ class IndependentAgent:
         if spoken_expr:
             try:
                 result = _evaluate_expression(spoken_expr)
-                reply = (
-                    f"I read that as {reading}. "
-                    f"{spoken_expr} = {_show_number(result)}."
-                )
+                if re.fullmatch(r"[0-9+\-*/().]+", reading or ""):
+                    reply = _explain_arithmetic(spoken_expr, result)
+                else:
+                    reply = (
+                        f"I read that as {reading}. "
+                        f"{spoken_expr} = {_show_number(result)}."
+                    )
                 return _personalize(reply, username)
             except Exception:
                 pass
