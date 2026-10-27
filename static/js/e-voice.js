@@ -27,8 +27,9 @@ if (!SpeechRecognition) {
   recognition.continuous = true;
   recognition.interimResults = true;
 
-  let finalTranscript = '';
-  let interimTranscript = '';
+  let committed = '';
+  let sessionFinal = '';
+  let sessionInterim = '';
   let listening = false;
   let stopRequested = false;
   let delivered = false;
@@ -146,33 +147,63 @@ if (!SpeechRecognition) {
     });
   };
 
-  const finishUtterance = () => {
+  const liveText = () => [committed, sessionFinal, sessionInterim]
+    .map((part) => part.replace(/\s+/g, ' ').trim())
+    .filter(Boolean)
+    .join(' ');
+
+  const renderTranscript = () => {
+    if (delivered || stopRequested) return;
+    const next = liveText();
+    if (messageInput.value === next) return;
+    messageInput.value = next;
+    const end = next.length;
+    if (document.activeElement === messageInput) messageInput.setSelectionRange(end, end);
+    messageInput.scrollTop = messageInput.scrollHeight;
+  };
+
+  const deliver = (spoken) => {
     if (delivered) return;
-    const spoken = `${finalTranscript} ${interimTranscript}`.replace(/\s+/g, ' ').trim();
+    stopRequested = true;
     setListening(false);
     stopLevels();
-    if (!spoken) return;
+    const text = (spoken || '').trim();
+    if (!text) {
+      messageInput.value = '';
+      return;
+    }
     delivered = true;
-    messageInput.value = spoken;
-    document.querySelector('.send-message').click();
+    messageInput.value = text;
+    const sendBtn = document.querySelector('.send-message');
+    if (sendBtn) sendBtn.click();
+    if (messageInput.value.trim() === text) messageInput.value = '';
+  };
+
+  const haltRecognition = () => {
+    try {
+      recognition.abort();
+    } catch (error) {
+      try {
+        recognition.stop();
+      } catch (stopError) {
+        /* already idle */
+      }
+    }
   };
 
   startRecordBtn.addEventListener('click', () => {
     if (listening) {
+      const spoken = liveText() || messageInput.value.trim();
       stopRequested = true;
-      setListening(false);
-      stopLevels();
-      try {
-        recognition.stop();
-      } catch (error) {
-        finishUtterance();
-      }
+      haltRecognition();
+      deliver(spoken);
       return;
     }
     stopRequested = false;
     delivered = false;
-    finalTranscript = '';
-    interimTranscript = '';
+    committed = messageInput.value.trim();
+    sessionFinal = '';
+    sessionInterim = '';
     history.length = 0;
     setListening(true);
     ensureAudio();
@@ -184,35 +215,47 @@ if (!SpeechRecognition) {
     }
   });
 
+  messageInput.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter' || event.isComposing || !listening) return;
+    event.preventDefault();
+    const spoken = liveText() || messageInput.value.trim();
+    stopRequested = true;
+    delivered = true;
+    setListening(false);
+    stopLevels();
+    messageInput.value = spoken;
+    haltRecognition();
+  });
+
   recognition.onstart = () => {
     if (!stopRequested) return;
-    try {
-      recognition.stop();
-    } catch (error) {
-      finishUtterance();
-    }
+    haltRecognition();
   };
 
   recognition.onresult = (event) => {
-    interimTranscript = '';
-    for (let i = event.resultIndex; i < event.results.length; i += 1) {
+    if (stopRequested || delivered) return;
+    sessionFinal = '';
+    sessionInterim = '';
+    for (let i = 0; i < event.results.length; i += 1) {
       const transcript = event.results[i][0].transcript;
-      if (event.results[i].isFinal) finalTranscript += `${transcript} `;
-      else interimTranscript += transcript;
+      if (event.results[i].isFinal) sessionFinal += `${transcript} `;
+      else sessionInterim += transcript;
     }
-    if (!stopRequested) messageInput.value = `${finalTranscript}${interimTranscript}`;
+    renderTranscript();
   };
 
   recognition.onend = () => {
-    if (listening && !stopRequested) {
-      try {
-        recognition.start();
-      } catch (error) {
-        finishUtterance();
-      }
-      return;
+    if (stopRequested || delivered) return;
+    committed = liveText();
+    sessionFinal = '';
+    sessionInterim = '';
+    renderTranscript();
+    if (!listening) return;
+    try {
+      recognition.start();
+    } catch (error) {
+      deliver(committed);
     }
-    finishUtterance();
   };
 
   recognition.onerror = (event) => {

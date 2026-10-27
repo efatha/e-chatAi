@@ -234,7 +234,9 @@ const handleOutgoingMsg = (e) => {
 };
 // --- Event Listeners ---
 msgInput.addEventListener("keydown", (e) => {
-  if (e.key === "Enter" && msgInput.value.trim()) handleOutgoingMsg(e);
+  if (e.key !== "Enter" || e.isComposing) return;
+  e.preventDefault();
+  if (msgInput.value.trim()) handleOutgoingMsg(e);
 });
 
 sendMsgBtn.addEventListener("click", handleOutgoingMsg);
