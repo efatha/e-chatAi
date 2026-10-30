@@ -1,5 +1,6 @@
 from flask import Flask, render_template, request, jsonify
 import os
+import re
 import secrets
 import threading
 from datetime import timedelta
@@ -42,8 +43,10 @@ app.secret_key = os.environ.get("FLASK_SECRET_KEY") or _local_secret_key()
 app.permanent_session_lifetime = timedelta(days=30)
 
 
-def _conversation_id():
+def _conversation_id(requested=None):
     session.permanent = True
+    if requested and re.fullmatch(r"[A-Za-z0-9-]{8,64}", str(requested)):
+        session["conversation_id"] = str(requested)
     if "conversation_id" not in session:
         session["conversation_id"] = uuid4().hex
     return session["conversation_id"]
@@ -77,7 +80,7 @@ def _chat_turn():
     if not message and not has_file:
         return jsonify({"error": "message is required"}), 400
 
-    conversation_id = _conversation_id()
+    conversation_id = _conversation_id(data.get("conversation_id"))
     if not memory.recent(conversation_id, limit=1):
         for item in browser_memory[-40:]:
             if not isinstance(item, dict):
@@ -122,7 +125,7 @@ def ask():
 
 @app.route("/memory", methods=["GET", "DELETE"])
 def conversation_memory():
-    conversation_id = _conversation_id()
+    conversation_id = _conversation_id(request.args.get("conversation_id"))
     if request.method == "DELETE":
         memory.clear(conversation_id)
         return jsonify({"status": "cleared"})

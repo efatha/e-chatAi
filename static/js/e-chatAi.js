@@ -9,55 +9,160 @@ const sendMsgBtn = document.querySelector(".send-message");
 const eChatBody = document.querySelector(".chat-body");
 const eFile = document.querySelector("#e-file");
 const fileUploadWrapper = document.querySelector(".file-upload-wrapper");
-const MEMORY_KEY = "eChatConversationMemory";
+const memoryLinks = document.querySelector("#memory-links");
+const memorySearch = document.querySelector("#memory-search-input");
+const newConversationButton = document.querySelector("#new-conversation");
+const memoryToggle = document.querySelector("#memory-toggle");
+const appShell = document.querySelector(".app-shell");
+const chatWelcome = document.querySelector("#chat-welcome");
+const THREADS_KEY = "eChatConversationThreads";
+const OLD_MEMORY_KEY = "eChatConversationMemory";
+let activeConversationId = null;
 
 const userData = {
   message: null,
   file: { data: null, mime_type: null }
 };
 
-const readBrowserMemory = () => {
+const readThreads = () => {
   try {
-    const stored = JSON.parse(localStorage.getItem(MEMORY_KEY) || "[]");
+    const stored = JSON.parse(localStorage.getItem(THREADS_KEY) || "[]");
     return Array.isArray(stored) ? stored : [];
   } catch (_error) {
     return [];
   }
 };
 
-const syncBrowserMemory = async () => {
-  try {
-    const response = await fetch("/memory");
-    if (!response.ok) return readBrowserMemory();
-    const data = await response.json();
-    if (Array.isArray(data.messages) && data.messages.length) {
-      localStorage.setItem(MEMORY_KEY, JSON.stringify(data.messages));
-      return data.messages;
-    }
-  } catch (error) {
-    console.error("Memory sync failed:", error);
-  }
-  return readBrowserMemory();
+const saveThreads = (threads) => {
+  localStorage.setItem(THREADS_KEY, JSON.stringify(threads.slice(0, 100)));
 };
 
-const restoreConversation = async () => {
-  const messages = await syncBrowserMemory();
-  if (!messages.length) return;
+const newConversationId = () => typeof crypto.randomUUID === "function"
+  ? crypto.randomUUID()
+  : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+
+const conversationTitle = (message) => {
+  const clean = String(message || "").replace(/\s+/g, " ").trim();
+  if (!clean) return "New conversation";
+  return clean.length > 38 ? `${clean.slice(0, 38).trim()}…` : clean;
+};
+
+const currentThread = () => readThreads().find((thread) => thread.id === activeConversationId);
+
+const clearChatPanel = () => {
   eChatBody.querySelectorAll(":scope > .message").forEach((node) => node.remove());
-  const footer = eChatBody.querySelector(".echat-footer");
-  messages.forEach((item) => {
-    if (!item || !["user", "assistant"].includes(item.role)) return;
-    const classes = item.role === "user" ? "user-message" : "bot-message";
-    const avatar = item.role === "assistant"
-      ? '<img class="bot-avatar" src="/static/images/artificial-intelligence.gif" alt="">'
-      : "";
-    const element = createMsgElement(
-      `${avatar}<div class="message-text">${escapeHtml(String(item.content || "")).replace(/\n/g, "<br>")}</div>`,
-      classes
-    );
-    eChatBody.insertBefore(element, footer);
+};
+
+const setWelcomeVisible = (visible) => {
+  chatWelcome.hidden = !visible;
+};
+
+const toggleMemory = () => {
+  const isOpen = appShell.classList.toggle("memory-open");
+  memoryToggle.setAttribute("aria-expanded", String(isOpen));
+  memoryToggle.setAttribute("aria-label", isOpen ? "Close memory" : "Open memory");
+};
+
+const renderMemoryLinks = (filter = "") => {
+  const query = filter.trim().toLowerCase();
+  const threads = readThreads().filter((thread) =>
+    !query || String(thread.title || "").toLowerCase().includes(query)
+  );
+  memoryLinks.innerHTML = "";
+  if (!threads.length) {
+    memoryLinks.innerHTML = '<p class="memory-empty">No saved conversations yet. Start chatting and the topic will appear here.</p>';
+    return;
+  }
+  threads.forEach((thread) => {
+    const link = document.createElement("button");
+    link.type = "button";
+    link.className = `memory-link${thread.id === activeConversationId ? " active" : ""}`;
+    link.textContent = thread.title || "Conversation";
+    link.title = thread.title || "Conversation";
+    link.addEventListener("click", () => openConversation(thread.id));
+    memoryLinks.appendChild(link);
   });
+};
+
+const renderStoredMessage = (item) => {
+  if (!item || !["user", "assistant"].includes(item.role)) return;
+  const classes = item.role === "user" ? "user-message" : "bot-message";
+  const avatar = item.role === "assistant"
+    ? '<img class="bot-avatar" src="/static/images/artificial-intelligence.gif" alt="">'
+    : "";
+  const element = createMsgElement(
+    `${avatar}<div class="message-text">${escapeHtml(String(item.content || "")).replace(/\n/g, "<br>")}</div>`,
+    classes
+  );
+  eChatBody.insertBefore(element, eChatBody.querySelector(".echat-footer"));
+};
+
+const openConversation = (conversationId) => {
+  const thread = readThreads().find((item) => item.id === conversationId);
+  if (!thread) return;
+  activeConversationId = thread.id;
+  clearChatPanel();
+  setWelcomeVisible(false);
+  (thread.messages || []).forEach(renderStoredMessage);
+  renderMemoryLinks(memorySearch.value);
   eChatBody.scrollTo({ top: eChatBody.scrollHeight });
+};
+
+const startNewConversation = () => {
+  activeConversationId = null;
+  clearChatPanel();
+  setWelcomeVisible(true);
+  renderMemoryLinks(memorySearch.value);
+  msgInput.focus();
+};
+
+const ensureConversation = (firstMessage) => {
+  if (activeConversationId && currentThread()) return currentThread();
+  const id = newConversationId();
+  const thread = {
+    id,
+    title: conversationTitle(firstMessage),
+    messages: [],
+    updatedAt: new Date().toISOString()
+  };
+  const threads = readThreads();
+  threads.unshift(thread);
+  saveThreads(threads);
+  activeConversationId = id;
+  setWelcomeVisible(false);
+  renderMemoryLinks(memorySearch.value);
+  return thread;
+};
+
+const addThreadMessage = (conversationId, role, content) => {
+  const threads = readThreads();
+  const index = threads.findIndex((thread) => thread.id === conversationId);
+  if (index < 0) return;
+  threads[index].messages = Array.isArray(threads[index].messages) ? threads[index].messages : [];
+  threads[index].messages.push({ role, content, created_at: new Date().toISOString() });
+  threads[index].updatedAt = new Date().toISOString();
+  const [updated] = threads.splice(index, 1);
+  threads.unshift(updated);
+  saveThreads(threads);
+  renderMemoryLinks(memorySearch.value);
+};
+
+const migrateOldMemory = () => {
+  try {
+    if (readThreads().length) return;
+    const oldMessages = JSON.parse(localStorage.getItem(OLD_MEMORY_KEY) || "[]");
+    if (!Array.isArray(oldMessages) || !oldMessages.length) return;
+    const firstUser = oldMessages.find((item) => item.role === "user");
+    saveThreads([{
+      id: newConversationId(),
+      title: conversationTitle(firstUser && firstUser.content),
+      messages: oldMessages,
+      updatedAt: new Date().toISOString()
+    }]);
+    localStorage.removeItem(OLD_MEMORY_KEY);
+  } catch (_error) {
+    localStorage.removeItem(OLD_MEMORY_KEY);
+  }
 };
 
 // Helper to create message elements
@@ -189,11 +294,13 @@ const wireCopyButtons = (root, blocks) => {
 };
 
 // Ask the server. It uses the independent agent, or the API when that API is active.
-const generateEchatResponse = async (incomingMsgDiv) => {
+const generateEchatResponse = async (incomingMsgDiv, conversationId, sentMessage) => {
   const msgElement = incomingMsgDiv.querySelector(".message-text");
+  const thread = readThreads().find((item) => item.id === conversationId);
   const payload = {
-    message: userData.message || "",
-    memory: readBrowserMemory().slice(-40)
+    message: sentMessage || "",
+    conversation_id: conversationId,
+    memory: ((thread && thread.messages) || []).slice(-40)
   };
   if (userData.file.data) payload.file = userData.file;
   userData.file = { data: null, mime_type: null };
@@ -231,7 +338,7 @@ const generateEchatResponse = async (incomingMsgDiv) => {
       }
 
       finishMessage(incomingMsgDiv);
-      syncBrowserMemory();
+      addThreadMessage(conversationId, "assistant", data.response);
       return;
     }
   } catch (error) {
@@ -248,15 +355,19 @@ const handleOutgoingMsg = (e) => {
   if (e) e.preventDefault();
   userData.message = msgInput.value.trim();
   if (!userData.message && !userData.file.data) return;
+  const sentMessage = userData.message;
+  const thread = ensureConversation(userData.message || "Image conversation");
+  const conversationId = thread.id;
+  addThreadMessage(conversationId, "user", userData.message || "Uploaded an image");
 
   // Display user's message
-  let msgContent = `<div class="message-text">${userData.message || ""}</div>`;
+  let msgContent = `<div class="message-text">${escapeHtml(userData.message || "")}</div>`;
   if (userData.file.data) {
     msgContent += `<div class="uploaded-image"><img src="data:${userData.file.mime_type};base64,${userData.file.data}" alt="Uploaded Image"></div>`;
   }
 
   const outgoingMsgDiv = createMsgElement(msgContent, "user-message");
-  eChatBody.appendChild(outgoingMsgDiv);
+  eChatBody.insertBefore(outgoingMsgDiv, eChatBody.querySelector(".echat-footer"));
   eChatBody.scrollTo({ top: eChatBody.scrollHeight, behavior: "smooth" });
 
   // Always display thinking bot first
@@ -270,12 +381,12 @@ const handleOutgoingMsg = (e) => {
       </div>
     </div>`;
   const incomingMsgDiv = createMsgElement(botContent, "bot-message");
-  eChatBody.appendChild(incomingMsgDiv);
+  eChatBody.insertBefore(incomingMsgDiv, eChatBody.querySelector(".echat-footer"));
   eChatBody.scrollTo({ top: eChatBody.scrollHeight, behavior: "smooth" });
 
   // Generate response after short delay
   setTimeout(() => {
-    generateEchatResponse(incomingMsgDiv);
+    generateEchatResponse(incomingMsgDiv, conversationId, sentMessage);
   }, 500);
 
   msgInput.value = "";
@@ -289,6 +400,9 @@ msgInput.addEventListener("keydown", (e) => {
 });
 
 sendMsgBtn.addEventListener("click", handleOutgoingMsg);
+newConversationButton.addEventListener("click", startNewConversation);
+memoryToggle.addEventListener("click", toggleMemory);
+memorySearch.addEventListener("input", () => renderMemoryLinks(memorySearch.value));
 document.querySelector("#e-file-upload").addEventListener("click", () => eFile.click());
 
 eFile.addEventListener("change", () => {
@@ -305,7 +419,8 @@ eFile.addEventListener("change", () => {
   reader.readAsDataURL(file);
 });
 
-restoreConversation();
+migrateOldMemory();
+startNewConversation();
 
 // Tooltip & Emoji Systems remain as defined in your previous version...
 // (Skipped for brevity but should be kept in your actual deployment)
