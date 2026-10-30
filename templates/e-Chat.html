@@ -19,7 +19,7 @@
     <meta property="og:image:width" content="600">
     <meta property="og:image:height" content="600">
     <link rel="icon" href="static/images/artificial-intelligence.png" type="image/png">
-    <link rel="stylesheet" href="/static/css/chatbot.css?v=8">
+    <link rel="stylesheet" href="/static/css/chatbot.css?v=10">
 </head>
 
 <body>
@@ -27,11 +27,31 @@
         <div class="username"><img src="static/images/undraw_profile.svg" width="40" alt="" class="icon"><Strong id="engage">Hello world</Strong> Happy to be in this chatbot </div>
         <div class="Profile"><strong class="iconUser">My Profile</strong></div>
     </div>
-    <article>
+    <main class="app-shell">
+      <aside class="memory-sidebar" aria-label="Conversation memory">
+        <div class="memory-heading">
+          <div>
+            <span class="memory-eyebrow">e-Chat</span>
+            <h2>Memory</h2>
+          </div>
+          <button type="button" id="new-conversation" aria-label="Start a new conversation" title="New conversation">+</button>
+        </div>
+        <nav id="memory-links" class="memory-links" aria-label="Saved conversations"></nav>
+        <div class="memory-search">
+          <label for="memory-search-input">Search memory</label>
+          <input id="memory-search-input" type="search" placeholder="Find a conversation..." autocomplete="off">
+        </div>
+      </aside>
+      <article>
         <!-- e-chat header -->
         <div class="chatbot-popup">
           <div class="chat-header">
            <div class="header-info">
+               <button type="button" id="memory-toggle" aria-label="Open memory" aria-expanded="false" title="Memory">
+                 <svg viewBox="0 0 24 24" aria-hidden="true">
+                   <path d="M4 5.5h16M4 12h16M4 18.5h16"/>
+                 </svg>
+               </button>
                <nav><div class="chatbot-logo"><img src="static/images/coding.gif" alt=""></div></nav>
                
                <h2 class="logo-text"> e-chat</h2>
@@ -40,24 +60,11 @@
           </div>
        <!-- e-chat body -->
         <div class="chat-body">
-           <div class="message bot-message">
-               <img class="bot-avatar" src="static/images/artificial-intelligence.gif" alt="">
-               <div class="message-text">Hi there 👋 <br/> How can I help you today?</div>
-           </div>
-           <div class="message user-message bot">
-            <!-- <div class="message-text">Lorem ipsum dolor sit, amet consectetur adipisicing elit. Velit distinctio eos expedita dolor culpa perspiciatis ipsa dignissimos? Fugit est rem, harum perspiciatis magni nulla molestias omnis aliquam hic aut aspernatur.</div> -->
-
-               <!--this is where the user message will be placed  -->
-          </div>
-           <div class="message bot-message thinking">
-               <!-- <img class="bot-avatar" src="/icon/artificial-intelligence.gif" alt="">
-               <div class="message-text">
-                   <div class="thinking-indicator">
-                       <div class="dot"></div>
-                       <div class="dot"></div>
-                       <div class="dot"></div>
-                   </div>
-               </div> -->
+           <div id="chat-welcome" class="chat-welcome">
+             <img src="/static/images/artificial-intelligence.gif" alt="">
+             <span>Your local research assistant</span>
+             <h1>How can e-Chat help you today?</h1>
+             <p>Ask a question, explore an idea, or continue a conversation from Memory.</p>
            </div>
            <div class="echat-footer">
              <form action="#">
@@ -122,11 +129,12 @@
             </form>
            </div>
         </div>
-    </article>
+      </article>
+    </main>
     <script src="/static/js/loadPage.js"></script>
     <script src="static/js/e-voice.js?v=10"></script>
     <script src="https://unpkg.com/@dotlottie/player-component@2.7.12/dist/dotlottie-player.mjs" type="module"></script>
     <script src="https://cdn.jsdelivr.net/npm/emoji-picker-element@^1/index.js"></script>
-    <script src="{{ url_for('static', filename='js/e-chatAi.js') }}?v=8"></script>
+    <script src="{{ url_for('static', filename='js/e-chatAi.js') }}?v=10"></script>
 </body>
 </html>
