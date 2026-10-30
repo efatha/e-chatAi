@@ -336,7 +336,6 @@ const generateEchatResponse = async (incomingMsgDiv, conversationId, sentMessage
           msgElement.style.color = "#fff8f2";
         }
       }
-
       finishMessage(incomingMsgDiv);
       addThreadMessage(conversationId, "assistant", data.response);
       return;
