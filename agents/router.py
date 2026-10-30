@@ -38,6 +38,10 @@ _AFFIRM = re.compile(
     r"^(?:yes|yeah|yep|sure|absolutely|ok|okay|of course)(?:\s+please)?[.!]*$",
     re.IGNORECASE,
 )
+_DECLINE = re.compile(
+    r"^(?:no|nope|not\s+now|no\s+thanks|no\s+thank\s+you)[.!]*$",
+    re.IGNORECASE,
+)
 _REMEMBER = re.compile(
     r"^(?:please\s+)?(?:remember(?:\s+that)?|keep\s+in\s+mind(?:\s+that)?|"
     r"don['’]?t\s+forget(?:\s+that)?)\s+(.+)$",
@@ -49,9 +53,38 @@ _RESEARCH = re.compile(
     re.IGNORECASE,
 )
 _PERSONAL_FACT = re.compile(
-    r"^my\s+(.{1,60}?)\s+is\s+(.{1,200}?)[.!]*$",
+    r"^(?:(?:yes|yeah|yep|sure|absolutely|okay|ok)[,;:\s-]+)?"
+    r"my\s+(.{1,60}?)\s+is\s+(.{1,200}?)[.!]*$",
     re.IGNORECASE,
 )
+_PERSONAL_QUESTION = re.compile(
+    r"^(who|what|how|where|when|why)(?:'s|\s+is)\s+my\s+(.{1,60}?)[?!.]*$",
+    re.IGNORECASE,
+)
+
+
+def _previous_message(history, current):
+    messages = [str(item).strip() for item in (history or []) if str(item).strip()]
+    if messages and messages[-1].casefold() == current.casefold():
+        messages.pop()
+    return messages[-1] if messages else ""
+
+
+def _pending_personal_question(text, history):
+    if not (_AFFIRM.match(text) or _DECLINE.match(text)):
+        return None
+    previous = _previous_message(history, text)
+    return _PERSONAL_QUESTION.match(previous)
+
+
+def _pending_research_subject(text, history):
+    if not _AFFIRM.match(text):
+        return None
+    previous = _previous_message(history, text)
+    personal_fact = _PERSONAL_FACT.match(previous)
+    if not personal_fact:
+        return None
+    return personal_fact.group(1).strip(), personal_fact.group(2).strip()
 
 
 def _accepted_definition(text, history, independent):
@@ -89,6 +122,67 @@ def answer_question(message, username=None, history=None, file=None):
     research_match = _RESEARCH.match(text) if text and not has_file else None
 
     if text and not has_file:
+        pending_personal = _pending_personal_question(text, history)
+        if pending_personal:
+            subject = pending_personal.group(2).strip()
+            if _AFFIRM.match(text):
+                return {
+                    "response": _with_name(
+                        f"Okay — tell me about your {subject}. "
+                        f"You can say, “My {subject} is …,” and I’ll remember it.",
+                        username,
+                    ),
+                    "source": "conversation",
+                    "provider": "local",
+                }
+            return {
+                "response": _with_name(
+                    f"That’s okay — I won’t guess. We can leave your {subject} "
+                    "unknown until you choose to share it.",
+                    username,
+                ),
+                "source": "conversation",
+                "provider": "local",
+            }
+
+        pending_research = _pending_research_subject(text, history)
+        if pending_research:
+            category, subject = pending_research
+            if "music" in category.lower() and subject.upper() == "RNB":
+                search_term = "R&B music"
+            else:
+                search_term = f"{subject} music" if "music" in category.lower() else subject
+            summary = wikipedia_summary(search_term, search_term)
+            if summary:
+                return {
+                    "response": _with_name(
+                        f"Here’s what I found about {subject}:\n\n{summary}",
+                        username,
+                    ),
+                    "source": "research",
+                    "provider": "wikipedia",
+                }
+            local_research = ollama_answer(
+                f"Research {search_term} and give a clear, factual overview."
+            )
+            if local_research:
+                local_research["response"] = _with_name(
+                    local_research["response"],
+                    username,
+                )
+                local_research["source"] = "research"
+                return local_research
+            return {
+                "response": _with_name(
+                    f"I understood your yes as a request to research {subject}. "
+                    "I couldn’t find a reliable source right now, but I can try again "
+                    "when Wikipedia or Ollama is available.",
+                    username,
+                ),
+                "source": "research",
+                "provider": "local",
+            }
+
         accepted = _accepted_definition(text, history, independent)
         if accepted:
             return {
@@ -122,11 +216,27 @@ def answer_question(message, username=None, history=None, file=None):
             value = personal_fact.group(2).strip()
             return {
                 "response": _with_name(
-                    f"Got it — your {subject} is {value}. I’ll remember that.",
+                    f"Great, I’ve got it — your {subject} is {value}. "
+                    f"I’ll remember that. Would you like me to research {value} "
+                    "or help you explore it further?",
                     username,
                 ),
                 "source": "memory",
                 "provider": "local-sqlite",
+            }
+        personal_question = _PERSONAL_QUESTION.match(text)
+        if personal_question:
+            question_word = personal_question.group(1).lower()
+            subject = personal_question.group(2).strip()
+            return {
+                "response": _with_name(
+                    f"I’m not sure {question_word} your {subject} is yet, "
+                    "and I don’t want to guess. "
+                    "Would you like to tell me so I can remember?",
+                    username,
+                ),
+                "source": "conversation",
+                "provider": "local",
             }
         if research_match:
             subject = research_match.group(1).strip()
@@ -201,17 +311,10 @@ def answer_question(message, username=None, history=None, file=None):
             fallback = f"{username}, {fallback}"
         return {"response": fallback, "source": "independent", "provider": "local"}
 
-    book_agent().ensure()
-    if not book_agent().books:
-        fallback = (
-            "This server has no PDFs in the books folder, so there is no page to cite. "
-            "The books and books/.index.pkl stay on the machine where they were indexed."
-        )
-    else:
-        fallback = (
-            "I don't have a matching page in the local books yet. "
-            "Say a bit more about what you want to prove or look up, and I will work from that."
-        )
+    fallback = (
+        "I’m not sure about that yet, and I don’t want to make up an answer. "
+        "Could you tell me a little more, or ask me to research it?"
+    )
     if independent is not None:
         meaning = independent.fallback(text, username, history)
         if meaning and "still learning" not in meaning.lower():

@@ -10,7 +10,8 @@ _FACT = re.compile(
     re.IGNORECASE,
 )
 _FACT_QUESTION = re.compile(
-    r"(?:what(?:'s|\s+is)|do\s+you\s+remember(?:\s+what)?)\s+my\s+(.{1,60}?)[?!.]*$",
+    r"(?:(?:what|who)(?:'s|\s+is)|do\s+you\s+remember(?:\s+(?:what|who))?)"
+    r"\s+my\s+(.{1,60}?)[?!.]*$",
     re.IGNORECASE,
 )
 
