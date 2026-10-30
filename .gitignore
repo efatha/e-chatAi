@@ -3,6 +3,7 @@ __pycache__/
 *.pyc
 .env
 *.sqlite3
+.flask-secret
 
 # Book PDFs ship with the repo so Render reads them from GitHub.
 # The index ships too, so startup does not reread every page.

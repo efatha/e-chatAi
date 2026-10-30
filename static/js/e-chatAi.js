@@ -9,10 +9,55 @@ const sendMsgBtn = document.querySelector(".send-message");
 const eChatBody = document.querySelector(".chat-body");
 const eFile = document.querySelector("#e-file");
 const fileUploadWrapper = document.querySelector(".file-upload-wrapper");
+const MEMORY_KEY = "eChatConversationMemory";
 
 const userData = {
   message: null,
   file: { data: null, mime_type: null }
+};
+
+const readBrowserMemory = () => {
+  try {
+    const stored = JSON.parse(localStorage.getItem(MEMORY_KEY) || "[]");
+    return Array.isArray(stored) ? stored : [];
+  } catch (_error) {
+    return [];
+  }
+};
+
+const syncBrowserMemory = async () => {
+  try {
+    const response = await fetch("/memory");
+    if (!response.ok) return readBrowserMemory();
+    const data = await response.json();
+    if (Array.isArray(data.messages) && data.messages.length) {
+      localStorage.setItem(MEMORY_KEY, JSON.stringify(data.messages));
+      return data.messages;
+    }
+  } catch (error) {
+    console.error("Memory sync failed:", error);
+  }
+  return readBrowserMemory();
+};
+
+const restoreConversation = async () => {
+  const messages = await syncBrowserMemory();
+  if (!messages.length) return;
+  eChatBody.querySelectorAll(":scope > .message").forEach((node) => node.remove());
+  const footer = eChatBody.querySelector(".echat-footer");
+  messages.forEach((item) => {
+    if (!item || !["user", "assistant"].includes(item.role)) return;
+    const classes = item.role === "user" ? "user-message" : "bot-message";
+    const avatar = item.role === "assistant"
+      ? '<img class="bot-avatar" src="/static/images/artificial-intelligence.gif" alt="">'
+      : "";
+    const element = createMsgElement(
+      `${avatar}<div class="message-text">${escapeHtml(String(item.content || "")).replace(/\n/g, "<br>")}</div>`,
+      classes
+    );
+    eChatBody.insertBefore(element, footer);
+  });
+  eChatBody.scrollTo({ top: eChatBody.scrollHeight });
 };
 
 // Helper to create message elements
@@ -146,7 +191,10 @@ const wireCopyButtons = (root, blocks) => {
 // Ask the server. It uses the independent agent, or the API when that API is active.
 const generateEchatResponse = async (incomingMsgDiv) => {
   const msgElement = incomingMsgDiv.querySelector(".message-text");
-  const payload = { message: userData.message || "" };
+  const payload = {
+    message: userData.message || "",
+    memory: readBrowserMemory().slice(-40)
+  };
   if (userData.file.data) payload.file = userData.file;
   userData.file = { data: null, mime_type: null };
 
@@ -183,6 +231,7 @@ const generateEchatResponse = async (incomingMsgDiv) => {
       }
 
       finishMessage(incomingMsgDiv);
+      syncBrowserMemory();
       return;
     }
   } catch (error) {
@@ -255,6 +304,8 @@ eFile.addEventListener("change", () => {
   };
   reader.readAsDataURL(file);
 });
+
+restoreConversation();
 
 // Tooltip & Emoji Systems remain as defined in your previous version...
 // (Skipped for brevity but should be kept in your actual deployment)

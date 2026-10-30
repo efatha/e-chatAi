@@ -1,6 +1,10 @@
 from flask import Flask, render_template, request, jsonify
 import os
+import secrets
 import threading
+from datetime import timedelta
+from pathlib import Path
+from uuid import uuid4
 from dotenv import load_dotenv
 
 load_dotenv()  # loads variables from .env
@@ -8,12 +12,14 @@ import json
 from flask import session
 
 from agents.router import answer_question, api_agent, book_agent, configure
+from agents.memory import ConversationMemory
 
 # Load the data.json file
 with open("data.json", "r", encoding="utf-8") as f:
     DATA = json.load(f)
 
 configure(DATA.get("trained_knowledge", []), DATA.get("word_meanings", {}))
+memory = ConversationMemory(os.environ.get("MEMORY_DATABASE", "e_chat_memory.sqlite3"))
 
 def _index_books():
     book_agent().refresh()
@@ -23,7 +29,24 @@ threading.Thread(target=_index_books, daemon=True).start()
 app = Flask(__name__)
 
 # FRONTEND ROUTES
-app.secret_key = "supersecret"
+def _local_secret_key():
+    secret_file = Path(".flask-secret")
+    if secret_file.exists():
+        return secret_file.read_text(encoding="utf-8").strip()
+    value = secrets.token_hex(32)
+    secret_file.write_text(value, encoding="utf-8")
+    return value
+
+
+app.secret_key = os.environ.get("FLASK_SECRET_KEY") or _local_secret_key()
+app.permanent_session_lifetime = timedelta(days=30)
+
+
+def _conversation_id():
+    session.permanent = True
+    if "conversation_id" not in session:
+        session["conversation_id"] = uuid4().hex
+    return session["conversation_id"]
 
 @app.route('/get-username', methods=['POST'])
 def get_username():
@@ -49,22 +72,44 @@ def _chat_turn():
     data = request.get_json(silent=True) or {}
     message = str(data.get("message") or "").strip()
     file = data.get("file") if isinstance(data.get("file"), dict) else None
+    browser_memory = data.get("memory") if isinstance(data.get("memory"), list) else []
     has_file = bool(file and file.get("data"))
     if not message and not has_file:
         return jsonify({"error": "message is required"}), 400
 
-    if "history" not in session:
-        session["history"] = []
+    conversation_id = _conversation_id()
+    if not memory.recent(conversation_id, limit=1):
+        for item in browser_memory[-40:]:
+            if not isinstance(item, dict):
+                continue
+            role = item.get("role")
+            content = item.get("content")
+            if role in {"user", "assistant"} and isinstance(content, str):
+                memory.add(conversation_id, role, content)
     if message:
-        session["history"].append(message)
-        session.modified = True
+        memory.add(conversation_id, "user", message)
 
-    result = answer_question(
-        message=message,
-        username=session.get("username"),
-        history=session.get("history", []),
-        file=file,
-    )
+    history = [
+        item["content"]
+        for item in memory.recent(conversation_id, limit=20, role="user")
+    ]
+
+    recalled = memory.recall(conversation_id, message) if message and not has_file else None
+    if recalled:
+        result = {
+            "response": recalled,
+            "source": "memory",
+            "provider": "local-sqlite",
+        }
+    else:
+        result = answer_question(
+            message=message,
+            username=session.get("username"),
+            history=history,
+            file=file,
+        )
+    if result.get("response"):
+        memory.add(conversation_id, "assistant", result["response"])
     return jsonify(result)
 
 
@@ -73,6 +118,15 @@ def _chat_turn():
 @app.route("/brain", methods=["POST"])
 def ask():
     return _chat_turn()
+
+
+@app.route("/memory", methods=["GET", "DELETE"])
+def conversation_memory():
+    conversation_id = _conversation_id()
+    if request.method == "DELETE":
+        memory.clear(conversation_id)
+        return jsonify({"status": "cleared"})
+    return jsonify({"messages": memory.recent(conversation_id)})
 
 
 @app.route("/grok", methods=["POST"])
