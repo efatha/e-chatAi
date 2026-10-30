@@ -38,6 +38,20 @@ _AFFIRM = re.compile(
     r"^(?:yes|yeah|yep|sure|absolutely|ok|okay|of course)(?:\s+please)?[.!]*$",
     re.IGNORECASE,
 )
+_REMEMBER = re.compile(
+    r"^(?:please\s+)?(?:remember(?:\s+that)?|keep\s+in\s+mind(?:\s+that)?|"
+    r"don['’]?t\s+forget(?:\s+that)?)\s+(.+)$",
+    re.IGNORECASE,
+)
+_RESEARCH = re.compile(
+    r"^(?:please\s+)?(?:research|investigate|look\s+into|find\s+information\s+"
+    r"(?:about|on))\s+(.+?)[?.!]*$",
+    re.IGNORECASE,
+)
+_PERSONAL_FACT = re.compile(
+    r"^my\s+(.{1,60}?)\s+is\s+(.{1,200}?)[.!]*$",
+    re.IGNORECASE,
+)
 
 
 def _accepted_definition(text, history, independent):
@@ -56,7 +70,7 @@ def _accepted_definition(text, history, independent):
         return None
     found = word_reference(word)
     if not found:
-        return f"I could not find a definition for {word}."
+        return None
     return found
 
 
@@ -72,6 +86,7 @@ def answer_question(message, username=None, history=None, file=None):
     history = history or []
     has_file = bool(file and file.get("data"))
     text = (message or "").strip()
+    research_match = _RESEARCH.match(text) if text and not has_file else None
 
     if text and not has_file:
         accepted = _accepted_definition(text, history, independent)
@@ -81,6 +96,47 @@ def answer_question(message, username=None, history=None, file=None):
                 "source": "knowledge",
                 "provider": "dictionary+wikipedia",
             }
+        if _AFFIRM.match(text):
+            return {
+                "response": _with_name(
+                    "Understood — yes. I’ll continue with that in mind.",
+                    username,
+                ),
+                "source": "intent",
+                "provider": "local",
+            }
+        remembered = _REMEMBER.match(text)
+        if remembered:
+            detail = remembered.group(1).strip(" .")
+            return {
+                "response": _with_name(
+                    f"I’ll keep this in memory: {detail}. You can ask me about it later.",
+                    username,
+                ),
+                "source": "memory",
+                "provider": "local-sqlite",
+            }
+        personal_fact = _PERSONAL_FACT.match(text)
+        if personal_fact:
+            subject = personal_fact.group(1).strip()
+            value = personal_fact.group(2).strip()
+            return {
+                "response": _with_name(
+                    f"Got it — your {subject} is {value}. I’ll remember that.",
+                    username,
+                ),
+                "source": "memory",
+                "provider": "local-sqlite",
+            }
+        if research_match:
+            subject = research_match.group(1).strip()
+            summary = wikipedia_summary(subject, text)
+            if summary:
+                return {
+                    "response": _with_name(summary, username),
+                    "source": "research",
+                    "provider": "wikipedia",
+                }
 
     if text and not has_file and independent is not None:
         local = independent.confident_answer(text, username, history)
@@ -164,6 +220,13 @@ def answer_question(message, username=None, history=None, file=None):
         found = search_result_text(text)
         if found:
             return {"response": _with_name(found, username), "source": "search", "provider": "web"}
+    if research_match:
+        subject = research_match.group(1).strip()
+        fallback = (
+            f"I understand this is a research request about {subject}. "
+            "I could not find enough reliable material in local memory or books yet. "
+            "Add a relevant PDF or start Ollama, then ask me to research it again."
+        )
     return {"response": fallback, "source": "independent", "provider": "local"}
 
 
