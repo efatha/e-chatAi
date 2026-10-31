@@ -170,8 +170,53 @@ class ReasoningScorecardTests(unittest.TestCase):
                 self.assertIn("- What they are:\n  - *Python*:", result["response"])
                 self.assertIn("- Advantages:\n  - *Python*:", result["response"])
                 self.assertIn("\n\n- Limitations:\n  - *Python*:", result["response"])
-                self.assertIn("\n\nSources used for this comparison:\n- python:", result["response"])
+                self.assertIn(
+                    "\n\nSources used for this comparison:\n"
+                    "- [Python — Wikipedia](https://en.wikipedia.org/wiki/Python)",
+                    result["response"],
+                )
+                self.assertIn(
+                    "- [Java — Wikipedia](https://en.wikipedia.org/wiki/Java)",
+                    result["response"],
+                )
+                self.assertNotIn("Wikipedia — Python\n", result["response"])
+                self.assertNotIn("Wikipedia — Java\n", result["response"])
                 self.assertIn("Sources used for this comparison:", result["response"])
+
+    def test_comparison_replaces_wikipedia_text_with_links_and_keeps_book_excerpts(self):
+        from agents.reasoning_patterns import pattern_answer
+
+        book_excerpt = "• _Logic Textbook, p. 12_: A concise source excerpt."
+        result = pattern_answer(
+            "What is the difference between Python and Java?",
+            notes={
+                "python": (
+                    "Wikipedia — Python\n"
+                    "Python is a language. This long description should not be repeated."
+                ),
+                "java": (
+                    "Wikipedia — Java\n"
+                    "Java is another language. This second long description should not be repeated."
+                ),
+            },
+            excerpts=[book_excerpt],
+        )
+
+        response = result["response"]
+        source_section = response.split("Sources used for this comparison:\n", 1)[1]
+        self.assertIn(
+            "- [Python — Wikipedia](https://en.wikipedia.org/wiki/Python)",
+            source_section,
+        )
+        self.assertIn(
+            "- [Java — Wikipedia](https://en.wikipedia.org/wiki/Java)",
+            source_section,
+        )
+        self.assertNotIn("This long description should not be repeated", source_section)
+        self.assertNotIn("This second long description should not be repeated", source_section)
+        self.assertIn("This long description should not be repeated", response)
+        self.assertIn("This second long description should not be repeated", response)
+        self.assertTrue(response.endswith(book_excerpt))
 
     def test_sqrt_two_citation_requires_specific_supporting_evidence(self):
         anchors = _page_anchors("Prove that the square root of 2 is irrational")

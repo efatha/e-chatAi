@@ -342,6 +342,34 @@ body{
   font-family: Consolas, "Courier New", monospace;
   font-style: italic;
 }
+.chat-body .message .message-text a[href^="https://en.wikipedia.org/wiki/"] {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3em;
+  color: #ffffff;
+  font-weight: 700;
+  text-decoration: underline;
+  text-decoration-color: #8be9fd;
+  text-decoration-thickness: 2px;
+  text-underline-offset: 3px;
+  transition: color 160ms ease, text-decoration-color 160ms ease, text-shadow 160ms ease;
+}
+.chat-body .message .message-text a[href^="https://en.wikipedia.org/wiki/"]::after {
+  content: "↗";
+  color: #8be9fd;
+  font-size: 0.85em;
+  text-decoration: none;
+}
+.chat-body .message .message-text a[href^="https://en.wikipedia.org/wiki/"]:hover {
+  color: #ffffff;
+  text-decoration-color: #ff9fce;
+  text-shadow: 0 0 8px rgba(255, 159, 206, 0.45);
+}
+.chat-body .message .message-text a[href^="https://en.wikipedia.org/wiki/"]:focus-visible {
+  border-radius: 3px;
+  outline: 2px solid #8be9fd;
+  outline-offset: 3px;
+}
 .chat-body .bot .message-text{
   border-radius: 12px 12px 2px 12px; /* Creates a chat bubble effect */
 

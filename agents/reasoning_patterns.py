@@ -5,6 +5,7 @@ stay available for proof questions; they are not replaced by these patterns.
 """
 
 import re
+from urllib.parse import quote
 
 
 def pattern_answer(message, notes=None, excerpts=None):
@@ -27,7 +28,7 @@ def pattern_answer(message, notes=None, excerpts=None):
     for builder in builders:
         reply = builder(lowered, text, notes)
         if reply:
-            reply = _with_sources(reply, notes, excerpts)
+            reply = _with_sources(reply, notes, excerpts, comparison=builder is _comparison)
             return {"response": reply, "source": "pattern", "provider": "reasoning-pattern"}
     return None
 
@@ -264,19 +265,33 @@ def _meaning(note):
     return sentence[:420]
 
 
-def _with_sources(reply, notes, excerpts):
+def _with_sources(reply, notes, excerpts, comparison=False):
     blocks = [reply]
-    sourced = [
-        f"- {name}: {note.replace(chr(10), chr(10) + '  ')}"
-        for name, note in notes.items()
-        if note
-    ]
+    if comparison:
+        sourced = [
+            f"- [{_wikipedia_title(name, note)} — Wikipedia]"
+            f"(https://en.wikipedia.org/wiki/{quote(_wikipedia_title(name, note).replace(' ', '_'), safe='()')})"
+            for name, note in notes.items()
+            if note
+        ]
+    else:
+        sourced = [
+            f"- {name}: {note.replace(chr(10), chr(10) + '  ')}"
+            for name, note in notes.items()
+            if note
+        ]
     if sourced or excerpts:
         blocks.append("")
         blocks.append("Sources used for this comparison:")
         blocks.extend(sourced)
         blocks.extend(excerpts)
     return "\n".join(blocks)
+
+
+def _wikipedia_title(name, note):
+    heading = re.search(r"^\s*Wikipedia\s*[—-]\s*(.+?)\s*$", note or "", re.IGNORECASE | re.MULTILINE)
+    title = heading.group(1).strip() if heading else str(name).strip()
+    return title or str(name).strip()
 
 
 def _hypotheses(situation, hypotheses, tests):

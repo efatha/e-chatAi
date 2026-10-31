@@ -267,6 +267,10 @@ const renderReply = (text, blocks) => {
 };
 
 const formatMarked = (text) => escapeHtml(text)
+  .replace(
+    /\[([^\]]+)\]\((https:\/\/en\.wikipedia\.org\/wiki\/[^)\s]+)\)/g,
+    '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>'
+  )
   .replace(/\*([^*\n]+)\*/g, "<strong>$1</strong>")
   .replace(/_([^_\n]+)_/g, "<em>$1</em>")
   .replace(/`([^`\n]+)`/g, "<code>$1</code>")
@@ -324,7 +328,7 @@ const generateEchatResponse = async (incomingMsgDiv, conversationId, sentMessage
 
     if (data.response) {
       const hasCode = /```[a-zA-Z0-9+#]*\n[\s\S]*?```/.test(data.response);
-      const hasMarks = /\*[^*\n]+\*/.test(data.response) || /_[^_\n]+_/.test(data.response) || /\bp\. \d+/.test(data.response);
+      const hasMarks = /\*[^*\n]+\*/.test(data.response) || /_[^_\n]+_/.test(data.response) || /\bp\. \d+/.test(data.response) || /\[[^\]]+\]\(https:\/\/en\.wikipedia\.org\/wiki\//.test(data.response);
       if (hasCode) {
         const blocks = [];
         msgElement.innerHTML = renderReply(data.response, blocks);
