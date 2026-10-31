@@ -162,13 +162,11 @@ def _case_study(lowered, text, notes):
 def _proof(lowered, text, notes):
     if not re.search(r"\b(prove|proof|show that)\b", lowered):
         return None
-    if re.search(r"\b(even|contrapositive|induction|contradiction|subset|if and only if)\b", lowered):
-        return None
     return (
-        "Given. Write the hypotheses in symbols before the prose.\n\n"
-        "Goal. Write the claim as an implication, a subset, or a quantified statement.\n\n"
-        "Proof. Each line is given, a definition, or a consequence of earlier lines. "
-        "The last line is the goal, and it names the definition it used."
+        "I don't have a checked local derivation for this exact claim, so I won't "
+        "present a generic proof outline as if it proved the result. Share the "
+        "domain, definitions, and allowed assumptions, and I can work through "
+        "the claim step by step."
     )
 
 

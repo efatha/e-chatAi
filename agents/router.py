@@ -248,6 +248,12 @@ def answer_question(message, username=None, history=None, file=None):
                     "provider": "wikipedia",
                 }
 
+    if text and not has_file and looks_like_reasoning(text):
+        from_books = book_agent().answer(text)
+        if from_books:
+            from_books["response"] = _with_name(from_books["response"], username)
+            return from_books
+
     if text and not has_file and independent is not None:
         local = independent.confident_answer(text, username, history)
         if local:
@@ -271,12 +277,6 @@ def answer_question(message, username=None, history=None, file=None):
             if knowledge:
                 knowledge["response"] = _with_name(knowledge["response"], username)
                 return knowledge
-
-    if text and not has_file and looks_like_reasoning(text):
-        from_books = book_agent().answer(text)
-        if from_books:
-            from_books["response"] = _with_name(from_books["response"], username)
-            return from_books
 
     if text and not has_file:
         meanings = independent.word_meanings if independent is not None else {}
