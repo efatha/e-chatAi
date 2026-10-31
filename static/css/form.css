@@ -18,6 +18,8 @@
     --efa-gray-800: #343a40;
     --efa-gray-900: #212529;
     --efa-secondary: #5382ed;
+    --efa-green: #2d9c4d;
+    --efa-pink: #ff6bb5;
     --efa-first-Backg: linear-gradient(to left, cyan, pink);
 }
 body{
@@ -100,13 +102,14 @@ button{
     padding:12px;
     border-radius: 8px;
     border: none;
-    background: linear-gradient(90deg, cyan, pink);
-    color:var(--efa-gray-600);
+    background: var(--efa-green);
+    color: var(--efa-pink);
     font-family: inter;
 }
 button:hover{
     border: none;
-    opacity: 0.7;
+    background: #246f40;
+    opacity: 0.92;
     transition: all 0.2s;
     cursor: pointer;
 }
