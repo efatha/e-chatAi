@@ -23,22 +23,26 @@
     <meta property="og:image:height" content="630">
     <!-- Favicon -->
     <link rel="icon" href="/static/images/artificial-intelligence.png" type="image/png">
-    <link rel="stylesheet" href="/static/css/form.css?v=6">
+    <link rel="stylesheet" href="/static/css/form.css?v=7">
 </head>
 <body>
   <!-- Beginning of the form container -->
   <div class="container">
     <div class="wrapper">
       <h1 class="efatha-chat">e-chat</h1>
-      <div class="form">
-        <label for="user_name">Your name <input type="text" class="inpName"></label>
-        <label for="user_email">Your email <input type="email" class="inpEmail"></label>
-        <button id="sendBtn">Send</button>
-      </div>
+      <form class="form" id="access-form">
+        <label for="user_name">Your name
+          <input id="user_name" name="username" type="text" class="inpName" autocomplete="name" required>
+        </label>
+        <label for="user_email">Your email
+          <input id="user_email" name="email" type="email" class="inpEmail" autocomplete="email" required>
+        </label>
+        <button id="sendBtn" type="submit">Send</button>
+      </form>
       <div id="efa-chatMessage"></div>
       <div class="new"></div>
     </div>
   </div>
-  <script src="/static/js/script.js?v=2"></script>
+  <script src="/static/js/script.js?v=3"></script>
 </body>
 </html>
