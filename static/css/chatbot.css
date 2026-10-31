@@ -366,6 +366,34 @@ body{
   font-family: Consolas, "Courier New", monospace;
   font-weight: 600;
 }
+.reply-prose a[href*="wikipedia.org/wiki/"] {
+  display: inline-flex;
+  align-items: center;
+  margin: 3px 2px;
+  padding: 5px 10px;
+  border: 1px solid rgba(139, 233, 253, 0.48);
+  border-radius: 999px;
+  color: #b8f3ff;
+  background: rgba(25, 68, 82, 0.42);
+  font-weight: 600;
+  text-decoration: none;
+  text-underline-offset: 3px;
+  box-shadow: 0 2px 8px rgba(20, 54, 65, 0.16);
+  transition: color 0.18s ease, background-color 0.18s ease,
+    border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease;
+}
+.reply-prose a[href*="wikipedia.org/wiki/"]:hover {
+  color: #fff;
+  background: linear-gradient(110deg, rgba(47, 139, 230, 0.72), rgba(0, 190, 200, 0.62));
+  border-color: rgba(184, 243, 255, 0.88);
+  box-shadow: 0 5px 14px rgba(20, 54, 65, 0.3);
+  text-decoration: underline;
+  transform: translateY(-1px);
+}
+.reply-prose a[href*="wikipedia.org/wiki/"]:focus-visible {
+  outline: 2px solid #b8f3ff;
+  outline-offset: 3px;
+}
 .reply-prose .tok-python { color: #50fa7b; }
 .reply-prose .tok-java { color: #ffb86c; }
 .reply-prose .tok-html { color: #ff79c6; }

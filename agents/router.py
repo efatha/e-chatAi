@@ -4,7 +4,8 @@ import re
 
 from agents.independent_agent import IndependentAgent, uncertain_subject
 from agents.book_agent import BookAgent
-from agents.reasoning_patterns import pattern_answer
+from agents.knowledge_agent import wikipedia_summary
+from agents.reasoning_patterns import concept_terms, pattern_answer
 
 _independent_agent = None
 _book_agent = None
@@ -173,6 +174,30 @@ def answer_question(message, username=None, history=None, file=None, conversatio
                 "source": "conversation",
                 "provider": "local",
             }
+    if text and not has_file:
+        terms = concept_terms(text)
+        if terms and len(terms) == 2:
+            notes = {}
+            for term in terms:
+                note = wikipedia_summary(term, text)
+                if note:
+                    notes[term] = note
+            patterned = pattern_answer(text, notes=notes)
+            if patterned and notes:
+                patterned["response"] = _with_name(patterned["response"], username)
+                patterned["provider"] = "wikipedia+reasoning-pattern"
+                return patterned
+            patterned = pattern_answer(text)
+            if patterned:
+                patterned["response"] = _with_name(patterned["response"], username)
+                return patterned
+            fallback = _with_name(
+                "I couldn’t find reliable source information for both sides of that "
+                "comparison, so I can’t compare them accurately.",
+                username,
+            )
+            return {"response": fallback, "source": "independent", "provider": "local"}
+
     if text and not has_file:
         from_books = book_agent().answer(text)
         if from_books:

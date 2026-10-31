@@ -5,6 +5,7 @@ stay available for proof questions; they are not replaced by these patterns.
 """
 
 import re
+from urllib.parse import quote
 
 
 def pattern_answer(message, notes=None, excerpts=None):
@@ -270,11 +271,16 @@ def _meaning(note):
 
 def _with_sources(reply, notes, excerpts):
     blocks = [reply]
-    sourced = [
-        f"- {name}: {note.replace(chr(10), chr(10) + '  ')}"
-        for name, note in notes.items()
-        if note
-    ]
+    sourced = []
+    for name, note in notes.items():
+        if not note:
+            continue
+        title_match = re.search(r"^Wikipedia — (.+)$", note, re.MULTILINE)
+        title = title_match.group(1).strip() if title_match else name
+        url_title = quote(title.replace(" ", "_"), safe="()")
+        sourced.append(
+            f"- [Wikipedia: {title}](https://en.wikipedia.org/wiki/{url_title})"
+        )
     if sourced or excerpts:
         blocks.append("")
         blocks.append("Sources used for this comparison:")

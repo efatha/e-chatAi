@@ -116,15 +116,73 @@ class ReasoningScorecardTests(unittest.TestCase):
     def test_unsupported_comparison_abstains_instead_of_filling_generic_sections(self):
         with (
             patch.object(router, "_independent_agent", None),
-            patch.object(router, "_book_agent", self.agent),
+            patch.object(
+                router,
+                "_book_agent",
+                SimpleNamespace(answer=lambda _question: self.fail(
+                    "Comparison questions must not fall through to book retrieval"
+                )),
+            ),
+            patch.object(router, "wikipedia_summary", return_value=None),
         ):
             result = router.answer_question(
                 "What is the difference between Python and Java?"
             )
         self.assertEqual(result["source"], "independent")
-        self.assertIn("offline build", result["response"])
+        self.assertIn("reliable source information for both sides", result["response"])
         self.assertNotIn("- Advantages:", result["response"])
         self.assertNotIn("Incorrect local fallback", result["response"])
+
+    def test_comparison_does_not_fall_back_to_irrelevant_book_excerpts(self):
+        books = SimpleNamespace(answer=lambda _question: self.fail(
+            "Comparison questions must not retrieve unrelated book passages"
+        ))
+        with (
+            patch.object(router, "_independent_agent", None),
+            patch.object(router, "_book_agent", books),
+            patch.object(router, "wikipedia_summary", return_value=None),
+        ):
+            result = router.answer_question(
+                "What is the difference between music and art?"
+            )
+
+        self.assertIn("reliable source information for both sides", result["response"])
+        self.assertNotIn("Bayesian", result["response"])
+        self.assertNotIn("Convex Optimization", result["response"])
+
+    def test_comparison_uses_wikipedia_notes_for_both_terms(self):
+        notes = {
+            "python": (
+                "Wikipedia — Python\n"
+                "Python is a high-level programming language. "
+                "Python emphasizes readability and has dynamic typing. "
+                "Python has a large standard library."
+            ),
+            "java": (
+                "Wikipedia — Java\n"
+                "Java is a high-level programming language. "
+                "Java uses static typing and compiles source into bytecode. "
+                "Java runs on the Java Virtual Machine."
+            ),
+        }
+        with (
+            patch.object(router, "_independent_agent", None),
+            patch.object(router, "_book_agent", self.agent),
+            patch.object(router, "wikipedia_summary", side_effect=lambda term, _question: notes[term]),
+        ):
+            result = router.answer_question(
+                "What is the difference between Python and Java?"
+            )
+
+        self.assertEqual(result["source"], "pattern")
+        self.assertEqual(result["provider"], "wikipedia+reasoning-pattern")
+        self.assertIn("dynamic typing", result["response"])
+        self.assertIn("static typing", result["response"])
+        self.assertIn("Sources used for this comparison:", result["response"])
+        self.assertIn("[Wikipedia: Python](https://en.wikipedia.org/wiki/Python)", result["response"])
+        self.assertIn("[Wikipedia: Java](https://en.wikipedia.org/wiki/Java)", result["response"])
+        sources = result["response"].split("Sources used for this comparison:", 1)[1]
+        self.assertNotIn("high-level programming language", sources)
 
     def test_sqrt_two_citation_requires_specific_supporting_evidence(self):
         anchors = _page_anchors("Prove that the square root of 2 is irrational")

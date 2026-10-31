@@ -267,6 +267,10 @@ const renderReply = (text, blocks) => {
 };
 
 const formatMarked = (text) => escapeHtml(text)
+  .replace(
+    /\[([^\]\n]+)\]\((https:\/\/[^\s)"']+)\)/g,
+    '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>'
+  )
   .replace(/\*([^*\n]+)\*/g, "<strong>$1</strong>")
   .replace(/_([^_\n]+)_/g, "<em>$1</em>")
   .replace(/`([^`\n]+)`/g, "<code>$1</code>")
