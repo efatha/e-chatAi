@@ -107,7 +107,7 @@ def _accepted_definition(text, history, independent):
     return found
 
 
-def answer_question(message, username=None, history=None, file=None):
+def answer_question(message, username=None, history=None, file=None, conversation=None):
     """
     Math, greetings, and trained facts stay local.
     A word or topic lookup uses the dictionary and Wikipedia, and Ollama
@@ -309,7 +309,11 @@ def answer_question(message, username=None, history=None, file=None):
                 return from_books
 
     prompt = text or "Describe this image."
-    api_result = api.retrieve(prompt, history, file if has_file else None)
+    api_result = api.retrieve(
+        prompt,
+        conversation if conversation is not None else history,
+        file if has_file else None,
+    )
     if api_result:
         return api_result
 

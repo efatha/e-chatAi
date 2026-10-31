@@ -311,9 +311,18 @@ const generateEchatResponse = async (incomingMsgDiv, conversationId, sentMessage
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
     });
-    const data = await response.json();
+    let data;
+    try {
+      data = await response.json();
+    } catch (_error) {
+      throw new Error(`Backend returned an unreadable response (HTTP ${response.status}).`);
+    }
 
-    if (response.ok && data.response) {
+    if (!response.ok) {
+      throw new Error(data.error || `Backend request failed (HTTP ${response.status}).`);
+    }
+
+    if (data.response) {
       const hasCode = /```[a-zA-Z0-9+#]*\n[\s\S]*?```/.test(data.response);
       const hasMarks = /\*[^*\n]+\*/.test(data.response) || /_[^_\n]+_/.test(data.response) || /\bp\. \d+/.test(data.response);
       if (hasCode) {
@@ -340,14 +349,13 @@ const generateEchatResponse = async (incomingMsgDiv, conversationId, sentMessage
       addThreadMessage(conversationId, "assistant", data.response);
       return;
     }
+    throw new Error(data.error || "Backend returned no answer.");
   } catch (error) {
     console.error("e-Chat request failed:", error);
+    msgElement.innerText = `The backend request failed: ${error.message}`;
+    finishMessage(incomingMsgDiv);
+    return;
   }
-
-  msgElement.style.color = "pink";
-  msgElement.style.borderLeft = "4px solid pink";
-  msgElement.innerText = "I'm currently in limited mode. Please check your connection or backend.";
-  finishMessage(incomingMsgDiv);
 };
 // Handle outgoing messages
 const handleOutgoingMsg = (e) => {

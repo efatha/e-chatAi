@@ -1,5 +1,6 @@
 """Small, local conversation memory backed by Python's built-in SQLite."""
 
+from contextlib import contextmanager
 import re
 import sqlite3
 from pathlib import Path
@@ -26,8 +27,17 @@ class ConversationMemory:
         connection.row_factory = sqlite3.Row
         return connection
 
+    @contextmanager
+    def _connection(self):
+        connection = self._connect()
+        try:
+            with connection:
+                yield connection
+        finally:
+            connection.close()
+
     def _initialize(self):
-        with self._connect() as connection:
+        with self._connection() as connection:
             connection.execute("PRAGMA journal_mode=WAL")
             connection.execute(
                 """
@@ -51,7 +61,7 @@ class ConversationMemory:
         text = str(content or "").strip()
         if not conversation_id or role not in {"user", "assistant"} or not text:
             return
-        with self._connect() as connection:
+        with self._connection() as connection:
             connection.execute(
                 """
                 INSERT INTO messages(conversation_id, role, content)
@@ -69,7 +79,7 @@ class ConversationMemory:
             role_filter = " AND role = ?"
             parameters.append(role)
         parameters.append(max(1, min(int(limit), 100)))
-        with self._connect() as connection:
+        with self._connection() as connection:
             rows = connection.execute(
                 f"""
                 SELECT role, content, created_at
@@ -85,7 +95,7 @@ class ConversationMemory:
     def clear(self, conversation_id):
         if not conversation_id:
             return
-        with self._connect() as connection:
+        with self._connection() as connection:
             connection.execute(
                 "DELETE FROM messages WHERE conversation_id = ?",
                 (conversation_id,),

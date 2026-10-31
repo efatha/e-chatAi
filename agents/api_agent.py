@@ -38,16 +38,16 @@ class ApiAgent:
         if not self.is_configured():
             return None
 
-        prompt = _with_history(message, history)
+        history = _conversation_history(history, message)
         has_file = bool(file and file.get("data"))
 
         if self._gemini_url():
-            text = self._gemini(prompt, file)
+            text = self._gemini(message, file, history)
             if text:
                 return {"response": text, "source": "api", "provider": "gemini"}
 
         if not has_file:
-            text = self._grok(prompt)
+            text = self._grok(message, history)
             if text:
                 return {"response": text, "source": "api", "provider": "grok"}
 
@@ -80,7 +80,7 @@ class ApiAgent:
             return f"{endpoint}?key={self.gemini_key}"
         return None
 
-    def _gemini(self, message, file=None):
+    def _gemini(self, message, file=None, history=None):
         url = self._gemini_url()
         if not url:
             return None
@@ -94,6 +94,14 @@ class ApiAgent:
                 }
             })
 
+        contents = [
+            {
+                "role": "model" if item["role"] == "assistant" else "user",
+                "parts": [{"text": item["content"]}],
+            }
+            for item in history or []
+        ]
+        contents.append({"role": "user", "parts": parts})
         payload = {
             "systemInstruction": {
                 "parts": [{
@@ -103,7 +111,7 @@ class ApiAgent:
                     )
                 }]
             },
-            "contents": [{"role": "user", "parts": parts}],
+            "contents": contents,
         }
 
         try:
@@ -116,7 +124,7 @@ class ApiAgent:
             logger.warning("Gemini request failed: %s", type(exc).__name__)
             return None
 
-    def _grok(self, message):
+    def _grok(self, message, history=None):
         payload = {
             "model": self.xai_model,
             "messages": [
@@ -127,6 +135,7 @@ class ApiAgent:
                         "Answer the user directly."
                     ),
                 },
+                *(history or []),
                 {"role": "user", "content": message},
             ],
         }
@@ -178,14 +187,28 @@ def _gemini_text(data):
     return _clean_text(text)
 
 
-def _with_history(message, history):
-    prior = [str(item).strip() for item in (history or []) if str(item).strip()]
-    if prior and prior[-1] == message:
-        prior = prior[:-1]
-    if not prior:
-        return message
-    earlier = "\n".join(prior[-4:])
-    return f"Previous user messages:\n{earlier}\n\nQuestion: {message}"
+def _conversation_history(history, current_message):
+    turns = []
+    for item in history or []:
+        if isinstance(item, dict):
+            role = item.get("role")
+            content = item.get("content")
+        else:
+            role = "user"
+            content = item
+        if role not in {"user", "assistant"} or not isinstance(content, str):
+            continue
+        content = content.strip()
+        if content:
+            turns.append({"role": role, "content": content})
+
+    if (
+        turns
+        and turns[-1]["role"] == "user"
+        and turns[-1]["content"].casefold() == str(current_message or "").strip().casefold()
+    ):
+        turns.pop()
+    return turns[-20:]
 
 
 def _clean_text(text):
