@@ -7,9 +7,11 @@ from unittest.mock import patch
 from agents import router
 from agents.book_agent import (
     BookAgent,
+    _idf_table,
     _navigation_chunk,
     _page_anchors,
     _page_supports,
+    _tokens,
 )
 from agents.reasoning_patterns import pattern_answer
 
@@ -91,87 +93,38 @@ class ReasoningScorecardTests(unittest.TestCase):
         self.assertIn("3 × 5 = 15", answer)
 
     def test_unknown_theorem_does_not_get_a_fake_proof_template(self):
-        api = SimpleNamespace(retrieve=lambda *_args, **_kwargs: None)
         with (
             patch.object(router, "_independent_agent", None),
-            patch.object(router, "_api_agent", api),
             patch.object(router, "_book_agent", self.agent),
-            patch.object(router, "wikipedia_summary", return_value=None),
-            patch.object(router, "ollama_answer", return_value=None),
         ):
             result = router.answer_question("Prove Fermat's Last Theorem.")
         self.assertIn("checked local derivation", result["response"])
         self.assertNotIn("Given. Write the hypotheses", result["response"])
 
     def test_router_returns_specific_proof_before_generic_reasoning(self):
-        api = SimpleNamespace(retrieve=lambda *_args, **_kwargs: None)
         independent = SimpleNamespace(
             confident_answer=lambda *_args, **_kwargs: "Incorrect word-definition fallback"
         )
         with (
             patch.object(router, "_independent_agent", independent),
-            patch.object(router, "_api_agent", api),
             patch.object(router, "_book_agent", self.agent),
-            patch.object(router, "wikipedia_summary", return_value=None),
-            patch.object(router, "ollama_answer", return_value=None),
         ):
             result = router.answer_question("Why is odd + odd always even?")
         self.assertIn("2(m + n + 1)", result["response"])
         self.assertNotIn("Incorrect word-definition fallback", result["response"])
 
-    def test_difference_of_definitions_uses_live_wikipedia_comparison(self):
-        questions = (
-            "What is the difference of Python and Java?",
-            "What is the difference between Python and Java?",
-        )
-        api = SimpleNamespace(retrieve=lambda *_args, **_kwargs: None)
-        independent = SimpleNamespace(
-            confident_answer=lambda *_args, **_kwargs: "Incorrect local fallback"
-        )
-        books = SimpleNamespace(
-            answer=lambda *_args, **_kwargs: self.fail(
-                "Definition comparisons must use the live-Wikipedia formatter first"
+    def test_unsupported_comparison_abstains_instead_of_filling_generic_sections(self):
+        with (
+            patch.object(router, "_independent_agent", None),
+            patch.object(router, "_book_agent", self.agent),
+        ):
+            result = router.answer_question(
+                "What is the difference between Python and Java?"
             )
-        )
-
-        for question in questions:
-            with self.subTest(question=question):
-                def wikipedia_note(term, _question):
-                    notes = {
-                        "python": (
-                            "Wikipedia — Python\n"
-                            "Python is a high-level, general-purpose programming language. "
-                            "It emphasizes readability."
-                        ),
-                        "java": (
-                            "Wikipedia — Java\n"
-                            "Java is a class-based, object-oriented programming language. "
-                            "It runs on a virtual machine."
-                        ),
-                    }
-                    return notes.get(term.lower())
-
-                with (
-                    patch.object(router, "_independent_agent", independent),
-                    patch.object(router, "_api_agent", api),
-                    patch.object(router, "_book_agent", books),
-                    patch.object(router, "wikipedia_summary", side_effect=wikipedia_note) as wiki,
-                ):
-                    result = router.answer_question(question)
-
-                self.assertEqual(result["source"], "pattern")
-                self.assertEqual(result["provider"], "reasoning-pattern")
-                self.assertEqual(
-                    [call.args[0] for call in wiki.call_args_list],
-                    ["python", "java"],
-                )
-                self.assertIn("Python is a high-level", result["response"])
-                self.assertIn("Java is a class-based", result["response"])
-                self.assertIn("- What they are:\n  - *Python*:", result["response"])
-                self.assertIn("- Advantages:\n  - *Python*:", result["response"])
-                self.assertIn("\n\n- Limitations:\n  - *Python*:", result["response"])
-                self.assertIn("\n\nSources used for this comparison:\n- python:", result["response"])
-                self.assertIn("Sources used for this comparison:", result["response"])
+        self.assertEqual(result["source"], "independent")
+        self.assertIn("offline build", result["response"])
+        self.assertNotIn("- Advantages:", result["response"])
+        self.assertNotIn("Incorrect local fallback", result["response"])
 
     def test_sqrt_two_citation_requires_specific_supporting_evidence(self):
         anchors = _page_anchors("Prove that the square root of 2 is irrational")
@@ -275,24 +228,126 @@ class ReasoningScorecardTests(unittest.TestCase):
         self.assertIn("Every sound argument is valid", answer)
         self.assertNotIn("I do not have a source page", answer)
 
-    def test_valid_sound_comparison_still_uses_live_wikipedia_route(self):
-        api = SimpleNamespace(retrieve=lambda *_args, **_kwargs: None)
-        independent = SimpleNamespace(
-            confident_answer=lambda *_args, **_kwargs: "Incorrect local fallback"
-        )
+    def test_valid_sound_comparison_uses_local_rule(self):
         with (
-            patch.object(router, "_independent_agent", independent),
-            patch.object(router, "_api_agent", api),
+            patch.object(router, "_independent_agent", None),
             patch.object(router, "_book_agent", self.agent),
-            patch.object(router, "wikipedia_summary", return_value=None) as wiki,
         ):
             result = router.answer_question(
                 "What’s the difference between a valid argument and a sound argument?"
             )
         self.assertEqual(result["source"], "pattern")
-        self.assertEqual(wiki.call_count, 2)
         self.assertIn("Every sound argument is valid", result["response"])
         self.assertNotIn("not sure", result["response"].lower())
+
+    def test_semantic_book_search_finds_paraphrased_local_evidence(self):
+        examples = (
+            (
+                "Linear Algebra",
+                128,
+                "A basis for a vector space is a linearly independent set that spans "
+                "the space. Every vector has a unique representation using coordinates "
+                "with respect to that basis.",
+                "How do I know each vector has one coordinate representation?",
+            ),
+            (
+                "Linear Algebra",
+                207,
+                "The rank-nullity theorem states that the dimension of the domain "
+                "equals the rank of the image plus the nullity of the kernel.",
+                "How does the dimension split between the image and kernel?",
+            ),
+            (
+                "Introductory Statistics",
+                71,
+                "A confidence interval estimates a population parameter from a sample "
+                "and is reported with a chosen confidence level.",
+                "How do samples give a range for an unknown population value?",
+            ),
+            (
+                "Think Python",
+                99,
+                "A for loop iterates over each item in a sequence such as a list or "
+                "range, executing the loop body for every element.",
+                "How can Python repeat an action for each item in a list?",
+            ),
+            (
+                "Think Bayes",
+                36,
+                "Bayes' rule updates a prior probability using evidence and likelihood "
+                "to produce a posterior probability.",
+                "How does evidence update what I believed beforehand?",
+            ),
+        )
+        chunks = [
+            {"text": passage, "tokens": _tokens(passage), "page": page}
+            for _title, page, passage, _question in examples
+        ]
+        self.agent.books = [
+            {"title": title, "chunks": [chunk]}
+            for (title, _page, _passage, _question), chunk in zip(examples, chunks)
+        ]
+        self.agent._idf = _idf_table(self.agent.books)
+
+        for title, page, _passage, question in examples:
+            with self.subTest(question=question):
+                matches = self.agent._from_each_book(question)
+                self.assertTrue(matches, f"No local evidence retrieved for {question}")
+                self.assertEqual(matches[0][0], title)
+                self.assertEqual(matches[0][1], page)
+
+    def test_book_answer_includes_verifiable_title_and_page(self):
+        passage = (
+            "A basis for a vector space is a linearly independent set that spans "
+            "the space. Every vector has a unique representation using coordinates "
+            "with respect to that basis."
+        )
+        self.agent.books = [{
+            "title": "Linear Algebra",
+            "chunks": [{
+                "text": passage,
+                "tokens": _tokens(passage),
+                "page": 128,
+            }],
+        }]
+        self.agent._idf = _idf_table(self.agent.books)
+
+        result = self.agent.answer(
+            "How do I know each vector has one coordinate representation?"
+        )
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result["source"], "book")
+        self.assertIn("_Linear Algebra, p. 128_", result["response"])
+        self.assertIn("unique representation", result["response"])
+
+    def test_comparison_without_local_evidence_does_not_invent_a_summary(self):
+        result = self.agent.answer(
+            "What is the difference between prior and posterior probability?"
+        )
+        self.assertIsNone(result)
+
+    def test_comparison_requires_evidence_for_both_sides(self):
+        passage = (
+            "Python is a general-purpose programming language with readable syntax "
+            "and a large standard library."
+        )
+        self.agent.books = [{
+            "title": "Think Python",
+            "chunks": [{
+                "text": passage,
+                "tokens": _tokens(passage),
+                "page": 1,
+            }],
+        }]
+        self.agent._idf = _idf_table(self.agent.books)
+
+        self.assertEqual(
+            self.agent._from_each_book(
+                "What is the difference between Python and Java?"
+            ),
+            [],
+        )
 
 
 if __name__ == "__main__":

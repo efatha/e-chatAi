@@ -323,6 +323,7 @@ const generateEchatResponse = async (incomingMsgDiv, conversationId, sentMessage
     }
 
     if (data.response) {
+      msgElement.classList.remove("backend-error");
       const hasCode = /```[a-zA-Z0-9+#]*\n[\s\S]*?```/.test(data.response);
       const hasMarks = /\*[^*\n]+\*/.test(data.response) || /_[^_\n]+_/.test(data.response) || /\bp\. \d+/.test(data.response);
       if (hasCode) {
@@ -353,6 +354,8 @@ const generateEchatResponse = async (incomingMsgDiv, conversationId, sentMessage
   } catch (error) {
     console.error("e-Chat request failed:", error);
     msgElement.innerText = `The backend request failed: ${error.message}`;
+    msgElement.classList.add("backend-error");
+    msgElement.setAttribute("role", "alert");
     finishMessage(incomingMsgDiv);
     return;
   }

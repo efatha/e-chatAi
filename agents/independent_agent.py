@@ -38,7 +38,7 @@ MEANING_PATTERNS = [
     r"(what is|what's|define|meaning of|tell me about|do you know)\s+(\w+)",
     r"(can you tell me about|explain)\s+(\w+)",
 ]
-# These are not dictionary headwords. Leave the full question for the API agent.
+# These are not dictionary headwords. Let book retrieval handle the full question.
 SKIP_MEANING_WORDS = {"the", "a", "an", "my", "your", "this", "that", "it"}
 
 
@@ -368,8 +368,14 @@ def uncertain_subject(message, trained_knowledge, word_meanings):
 
 def _offer(word):
     if not word:
-        return "I’m not sure about that yet. Let’s check a reliable source together."
-    return f"I’m not sure about that yet. Let’s check a reliable source together.\n_`Would you like to know what {word} means?`_"
+        return (
+            "I couldn’t find reliable support in curated local knowledge or "
+            "indexed books. This offline build won’t invent an answer."
+        )
+    return (
+        f"I don’t have a reliable local definition for {word}. It is not in the "
+        "curated knowledge or indexed books, and this offline build won’t invent one."
+    )
 
 
 def _wh_reply(message, trained_knowledge, word_meanings):
@@ -432,7 +438,10 @@ def _lookup_word(message, word_meanings):
         meaning = word_meanings.get(word)
         if meaning:
             return f"📖 {word.capitalize()}: {meaning}", True
-        return f"🤔 Sorry, I don't know about '{word}' yet. You may teach me about it", False
+        return (
+            f"I don't have a curated local definition for '{word}' yet.",
+            False,
+        )
     return None, False
 
 
@@ -528,7 +537,7 @@ class IndependentAgent:
         return None
 
     def fallback(self, message, username=None, history=None):
-        """Used when the API agent is offline and no confident local answer exists."""
+        """Return a curated local meaning when no stronger local answer exists."""
         meaning, found = _lookup_word(message or "", self.word_meanings)
         if meaning and not found:
             return _personalize(meaning, username)

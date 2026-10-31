@@ -2,12 +2,16 @@
 ## e-Chat: An Advanced AI Chatbot by Efatha Rutakaza
 
 # Overview
-e-Chat is an advanced artificial intelligence chatbot, meticulously designed and developed by Efatha Rutakaza. Tailored to provide innovative solutions for a wide range of research requirements, e-Chat leverages cutting-edge AI technologies to deliver dynamic, context-aware, and highly accurate interactions. From academic inquiries to technical problem-solving and general knowledge exploration, e-Chat ensures reliable and precise responses, making it a versatile tool for diverse users.
-
-This AI-driven platform addresses complex research challenges with unmatched efficiency and precision. Developed by Efatha Rutakaza, e-Chat exemplifies the transformative potential of artificial intelligence in revolutionizing research methodologies and enhancing problem-solving capabilities across various domains.
+e-Chat is an in-development, locally operated assistant built with Flask and
+Python. It can handle selected deterministic reasoning patterns, curated local
+facts, conversation memory, and retrieval from PDFs placed in `books/`.
+Its current implementation is not a general-purpose language model and does
+not yet provide broad research coverage. Answer quality depends on the rules,
+curated data, and books available on the machine.
 
 ## Key Feature: Access Form
-Before engaging with e-Chat, users will be required to complete a brief Access Form. This ensures a personalized and secure experience tailored to their specific research needs. The form collects the following details:
+The current interface includes an access form intended to personalize the
+experience. It collects:
 
 Name: To personalize interactions.
 Email Address: For communication and support.
@@ -16,11 +20,12 @@ Preferred Language: For multilingual support.
 Once the form is submitted, users will be directed to the interactive AI platform, where they can access e-Chat’s full capabilities.
 
 ## Key Features
-Local Reasoning and Retrieval: e-Chat combines deterministic Python reasoning, locally indexed book excerpts, and optional local or hosted language models. The rule-based reasoning is not model training.
-Advanced Research Capabilities: Optimized to assist users in academic, scientific, and technical research, offering in-depth analysis and resourceful insights.
-Natural Language Understanding: Supports a wide range of languages, enabling seamless communication and understanding of complex queries.
-Extensibility: Open to integration with external APIs, databases, and research tools to enhance its capabilities.
-User-Friendly Interface: Designed for accessibility, with features that cater to both novice and advanced users.
+- Local reasoning: deterministic Python rules for arithmetic, selected proofs, and curated facts.
+- Book retrieval: indexes PDFs in `books/` locally and returns matching excerpts with title and page.
+- Offline by design: chat requests do not call hosted APIs, web search, Wikipedia, or a local model server.
+- Honest limits: when local evidence is not strong enough, e-Chat abstains rather than inventing a sourced answer.
+
+The book retriever uses lexical matching and a small built-in set of concept aliases. It is not a trained language model or a general semantic search engine. New results should be covered by offline regression tests before treating them as reliable.
  ## Features
 Human-like Interaction
 Support for Advanced Research
@@ -29,7 +34,7 @@ Extensible and Scalable
 ## Technology Stack
 Frontend: Python, Vanilla JavaScript, HTML(Flask), CSS
 
-## Offline reasoning scorecard
+## Offline reasoning and book-retrieval scorecard
 
 Run the local reasoning regression set with:
 
@@ -37,11 +42,11 @@ Run the local reasoning regression set with:
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
 
-The scorecard checks parity proofs and counterexamples, induction claims,
-elementary logic, selected linear-algebra and convexity definitions, comparison
-formatting, unsupported-proof abstention, and whether book citations support the
-claim. These tests run without external services. Passing them verifies these
-specific cases; it does not measure general knowledge or train a model.
+The scorecard checks arithmetic and proof patterns, selected definitions,
+unsupported-answer abstention, and local book retrieval for paraphrased questions.
+Book results must retain their title and page. These tests run without external
+services. Passing them verifies only the included cases; it does not measure
+general knowledge or train a model.
 
 Current acceptance targets are 100% on the included deterministic proof,
 counterexample, and definition cases; no fabricated proof for a malformed or

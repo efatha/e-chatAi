@@ -75,10 +75,14 @@ def _comparison(lowered, text, notes):
         )
     left_note = notes.get(left) or ""
     right_note = notes.get(right) or ""
+    if not left_note or not right_note:
+        return None
     left_used = set()
     right_used = set()
-    left_line = _take_sentence(left_note, left_used) or f"I do not have a source page for {left} yet, so I will not invent its definition."
-    right_line = _take_sentence(right_note, right_used) or f"I do not have a source page for {right} yet, so I will not invent its definition."
+    left_line = _take_sentence(left_note, left_used)
+    right_line = _take_sentence(right_note, right_used)
+    if not left_line or not right_line:
+        return None
     left_adv = _side_point(left, left_note, _ADVANTAGE_CUES, "what it can do", left_used)
     right_adv = _side_point(right, right_note, _ADVANTAGE_CUES, "what it can do", right_used)
     left_limit = _side_point(left, left_note, _LIMIT_CUES, "where it stops", left_used)

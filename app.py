@@ -12,7 +12,7 @@ load_dotenv()  # loads variables from .env
 import json
 from flask import session
 
-from agents.router import answer_question, api_agent, book_agent, configure
+from agents.router import answer_question, book_agent, configure
 from agents.memory import ConversationMemory
 
 # Load the data.json file
@@ -127,7 +127,7 @@ def _chat_turn():
     return jsonify(result)
 
 
-# Both routes share the two agents: local first, API when it is active.
+# Both routes use the same local-only brain.
 @app.route("/ask", methods=["POST"])
 @app.route("/brain", methods=["POST"])
 def ask():
@@ -142,21 +142,6 @@ def conversation_memory():
         return jsonify({"status": "cleared"})
     return jsonify({"messages": memory.recent(conversation_id)})
 
-
-@app.route("/grok", methods=["POST"])
-def grok():
-    data = request.get_json(silent=True) or {}
-    message = str(data.get("message") or "").strip()
-    if not message:
-        return jsonify({"error": "message is required"}), 400
-
-    agent = api_agent()
-    if not agent.has_grok():
-        return jsonify({"error": "Grok API is not configured"}), 503
-    result = agent.grok_only(message)
-    if not result:
-        return jsonify({"error": "Grok API failed"}), 502
-    return jsonify(result)
 
 # RUN SERVER
 if __name__ == "__main__":

@@ -9,6 +9,7 @@ import math
 import pickle
 import re
 import threading
+import unicodedata
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -36,6 +37,92 @@ REASONING_HINTS = (
     "linear", "matrix", "vector", "convex", "gradient", "eigen",
     "bayes", "posterior", "prior", "likelihood",
     "variance", "statistic", "statistics", "hypothesis", "distribution", "confidence",
+)
+SEMANTIC_CONCEPTS = (
+    (
+        "basis",
+        re.compile(r"\bbases?\b|\bunique coordinates?\b|\bcoordinate representation\b"),
+        (
+            ("basis", "bases"),
+            ("span", "spanning"),
+            ("independent", "independence"),
+            ("coordinate", "coordinates", "representation", "unique"),
+        ),
+    ),
+    (
+        "rank-nullity",
+        re.compile(
+            r"\brank\s*[- ]\s*nullity\b|\bnullity\b|"
+            r"\bdimension\b.*\b(image|kernel|null space)\b|"
+            r"\b(image|kernel|null space)\b.*\bdimension\b"
+        ),
+        (
+            ("rank",),
+            ("nullity", "kernel", "null space"),
+            ("dimension", "dimensional"),
+            ("linear map", "transformation"),
+        ),
+    ),
+    (
+        "convexity",
+        re.compile(r"\bconvex\b|\bline segment\b"),
+        (
+            ("convex",),
+            ("line segment", "segment"),
+            ("combination", "interpolation"),
+            ("set", "points"),
+        ),
+    ),
+    (
+        "confidence-interval",
+        re.compile(
+            r"\bconfidence interval\b|\bconfidence level\b|"
+            r"\b(interval|range)\b.*\bpopulation\b|"
+            r"\bpopulation\b.*\b(interval|range)\b"
+        ),
+        (
+            ("confidence",),
+            ("interval",),
+            ("population", "parameter"),
+            ("sample", "estimate"),
+        ),
+    ),
+    (
+        "quantifier-negation",
+        re.compile(r"\bquantifiers?\b|\bfor all\b|\bevery\b.*\bnegat"),
+        (
+            ("quantifier", "quantifiers"),
+            ("negate", "negation"),
+            ("universal", "every", "for all"),
+            ("existential", "exists", "there exists"),
+        ),
+    ),
+    (
+        "python-loop",
+        re.compile(
+            r"\bfor loop\b|\biterate\b|\biteration\b|"
+            r"\bpython\b.*\b(each|item|repeat)\b"
+        ),
+        (
+            ("loop", "iteration", "iterate"),
+            ("python",),
+            ("sequence", "list", "range"),
+            ("each", "element", "item"),
+        ),
+    ),
+    (
+        "bayesian-update",
+        re.compile(
+            r"\bprior\b.*\bposterior\b|\bposterior\b.*\bprior\b|\bbayes|"
+            r"\bupdate\b.*\b(evidence|belief)|\b(evidence|belief)\b.*\bupdate"
+        ),
+        (
+                ("prior", "before", "beforehand", "initial belief"),
+                ("posterior", "after", "updated", "revised belief"),
+                ("probability", "likelihood", "belief"),
+                ("evidence", "bayes", "conditional", "update"),
+        ),
+    ),
 )
 
 
@@ -86,14 +173,20 @@ class BookAgent:
         if not text:
             return None
 
-        habit = _proof_habit(text)
-        if not habit:
-            return None
         passages = self._from_each_book(text)
-        response = _speak(text, habit, passages)
+        habit = _proof_habit(text)
+        if habit:
+            response = _speak(text, habit, passages)
+        elif passages:
+            response = _evidence_answer(passages)
+        else:
+            return None
         if not response:
             return None
-        cited = "\n\nFrom the books:" in response
+        cited = any(
+            f"_{title}, p. {page}_" in response
+            for title, page, _ in passages
+        )
         return {
             "response": response,
             "source": "book" if cited else "reasoning",
@@ -101,19 +194,24 @@ class BookAgent:
         }
 
     def _from_each_book(self, message):
-        """Top passages by how rare the question's words are in that page."""
+        """Rank local passages with question terms and built-in concept synonyms."""
         if (
             _parity_habit((message or "").lower())
             or _induction_habit((message or "").lower())
         ):
             return []
         query = _tokens(message)
+        concept = _semantic_concept(message)
+        concept_key, concept_groups = concept if concept else (None, ())
+        expanded_query = set(query)
+        for group in concept_groups:
+            for phrase in group:
+                expanded_query.update(_tokens(phrase))
         if "statistic" in (message or "").lower():
-            query = set(query) | {"probability", "statistics"}
-        if not query or not self.books:
+            expanded_query.update({"probability", "statistics"})
+        if not expanded_query or not self.books:
             return []
         ranked = []
-        rarest = max(query, key=lambda token: self._idf.get(token, 0))
         for book in self.books:
             best = None
             for chunk in book["chunks"]:
@@ -121,9 +219,31 @@ class BookAgent:
                     continue
                 if not _on_topic(message, book["title"], chunk["text"]):
                     continue
-                score = _tfidf(query, chunk["tokens"], self._idf)
-                if rarest in chunk["tokens"]:
-                    score += self._idf.get(rarest, 0)
+                chunk_tokens = chunk["tokens"]
+                if concept_key and not _supports_semantic_concept(
+                    concept_key, message, chunk["text"]
+                ):
+                    continue
+                if concept_groups:
+                    concept_hits = sum(
+                        any(set(_tokens(phrase)) & chunk_tokens for phrase in group)
+                        for group in concept_groups
+                    )
+                    if concept_hits < 2:
+                        continue
+                elif query and len(query & chunk_tokens) < min(2, len(query)):
+                    continue
+                direct_hits = len(query & chunk_tokens)
+                score = _tfidf(expanded_query, chunk_tokens, self._idf)
+                score += 2.5 * direct_hits
+                if concept_groups:
+                    score += 3 * concept_hits
+                if any(token in chunk_tokens for token in ("definition", "theorem", "means")):
+                    score += 0.5
+                if concept_key and _has_explicit_concept_phrase(
+                    concept_key, chunk["text"]
+                ):
+                    score += 12
                 if "statistic" in (message or "").lower() and "statistic" in book["title"].lower():
                     score += 3
                 if chunk["text"].count(" . ") > 6 or chunk["text"].lower().count("chapter") >= 3:
@@ -131,12 +251,23 @@ class BookAgent:
                 if best is None or score > best[0]:
                     best = (score, chunk["text"], chunk["page"])
             if best and best[0] >= 4:
-                ranked.append((best[0], book["title"], best[2], _clip(best[1])))
+                ranked.append((
+                    best[0],
+                    book["title"],
+                    best[2],
+                    _clip_relevant(
+                        best[1],
+                        query,
+                        expanded_query,
+                        concept_groups,
+                        self._idf,
+                    ),
+                ))
         ranked.sort(key=lambda item: item[0], reverse=True)
         kept = ranked[:1]
-        if len(ranked) > 1 and ranked[1][0] >= ranked[0][0] * 0.72:
+        if len(ranked) > 1 and ranked[1][0] >= ranked[0][0] * 0.88:
             kept.append(ranked[1])
-        return [(title, page, snippet) for _score, title, page, snippet in kept]
+        return [(title, page, snippet) for _, title, page, snippet in kept]
 
     def excerpts(self, message):
         self.ensure()
@@ -196,6 +327,75 @@ def _tokens(text):
     return {word for word in words if word not in STOPWORDS}
 
 
+def _semantic_concept(message):
+    lowered = unicodedata.normalize("NFKC", message or "").lower()
+    for key, pattern, groups in SEMANTIC_CONCEPTS:
+        if pattern.search(lowered):
+            return key, groups
+    return None
+
+
+def _supports_semantic_concept(key, question, passage):
+    lowered = unicodedata.normalize("NFKC", passage or "").lower()
+    if key == "basis":
+        if re.search(r"\b(unique|uniquely)\b", question, re.I) and re.search(
+            r"\bcoordinate", question, re.I
+        ):
+            return (
+                bool(re.search(r"\bbases?\b", lowered))
+                and bool(re.search(r"\b(unique|uniquely)\b", lowered))
+                and bool(re.search(r"\b(coordinate|linear combination)\b", lowered))
+            )
+    elif key == "rank-nullity":
+        return (
+            bool(re.search(r"\brank\b", lowered))
+            and bool(re.search(r"\b(nullity|kernel|null space)\b", lowered))
+            and bool(re.search(r"\bdimension\b", lowered))
+        )
+    elif key == "confidence-interval":
+        return (
+            bool(re.search(r"\b(interval|range)\b", lowered))
+            and bool(re.search(r"\b(population|parameter)\b", lowered))
+            and bool(re.search(r"\b(confidence|estimate|estimated)\b", lowered))
+        )
+    elif key == "python-loop":
+        return (
+            bool(re.search(r"\b(loop|iteration|iterate)\b", lowered))
+            and bool(re.search(r"\b(each|element|item|sequence|list|range)\b", lowered))
+        )
+    elif key == "bayesian-update":
+        return (
+            bool(re.search(r"\bbayes\b", lowered))
+            and bool(re.search(r"\bprior\b", lowered))
+            and bool(re.search(r"\bposterior\b", lowered))
+            and bool(re.search(r"\b(update|evidence|data)\b", lowered))
+        )
+    return True
+
+
+def _has_explicit_concept_phrase(key, passage):
+    lowered = unicodedata.normalize("NFKC", passage or "").lower()
+    if key == "basis":
+        return bool(re.search(
+            r"\blinear combination of basis vectors\b.{0,80}\bunique\b|"
+            r"\b(unique|uniquely)\b.{0,80}\bcoordinates?\b|"
+            r"\bbasis\b.{0,100}\bunique\b.{0,100}\bcoordinates?\b",
+            lowered,
+        ))
+    if key == "rank-nullity":
+        return bool(re.search(
+            r"\brank\b.{0,100}\bnullity\b|\bnullity\b.{0,100}\brank\b",
+            lowered,
+        ))
+    if key == "confidence-interval":
+        return bool(re.search(r"\bconfidence interval\b", lowered))
+    if key == "python-loop":
+        return bool(re.search(r"\bfor\b.{0,100}\bin\b.{0,100}\bloop\b", lowered))
+    if key == "bayesian-update":
+        return bool(re.search(r"\bbayes(?:'|’)?s?\s+rule\b", lowered))
+    return False
+
+
 def _known_title(path):
     key = path.stem.lower().replace("-", "").replace("_", "").replace(" ", "")
     names = (
@@ -225,6 +425,48 @@ def _clip(text, limit=240):
     if len(snippet) <= limit:
         return snippet
     return snippet[:limit].rsplit(" ", 1)[0] + "..."
+
+
+def _clip_relevant(text, query, expanded_query, concept_groups, idf, limit=240):
+    normalized = re.sub(r"\s+", " ", text or "").strip()
+    if len(normalized) <= limit:
+        return normalized
+
+    def score(candidate):
+        tokens = _tokens(candidate)
+        concept_hits = sum(
+            any(set(_tokens(phrase)) & tokens for phrase in group)
+            for group in concept_groups
+        )
+        return (
+            3 * len(query & tokens)
+            + _tfidf(expanded_query, tokens, idf)
+            + 4 * concept_hits
+            - 0.025 * len(candidate)
+        )
+
+    sentences = re.split(r"(?<=[.!?])\s+", normalized)
+    candidates = [sentence for sentence in sentences if sentence.strip()]
+    best = max(candidates, key=score, default=normalized)
+    if len(best) <= limit:
+        return best
+
+    words = list(re.finditer(r"\S+", best))
+    windows = []
+    for start in range(len(words)):
+        for end in range(start + 1, len(words) + 1):
+            if words[end - 1].end() - words[start].start() > limit:
+                break
+            candidate = best[words[start].start():words[end - 1].end()]
+            if len(candidate) >= 60:
+                windows.append(candidate)
+    if not windows:
+        return _clip(best, limit)
+    selected = max(windows, key=score)
+    start = best.find(selected)
+    prefix = "..." if start > 0 else ""
+    suffix = "..." if start + len(selected) < len(best) else ""
+    return prefix + selected + suffix
 
 
 def _clauses(text):
@@ -290,21 +532,34 @@ def _navigation_chunk(text):
 
 
 def _speak(text, habit, passages):
-    """The reply is the derived argument, plus a page only when that page states it."""
-    conclusion = habit or text
-    anchors = _page_anchors(text)
-    kept = [
-        item for item in passages
-        if _page_supports(item[2], conclusion, anchors)
-    ]
+    """Keep local derivations distinct from evidence quoted from indexed books."""
     lines = []
     if habit:
-        lines.append(habit)
-    if kept:
+        lines.append(f"Built-in reasoning (not a quotation):\n{habit}")
+    anchors = _page_anchors(text)
+    supported = [
+        item for item in passages
+        if _page_supports(item[2], text, anchors)
+        or (habit and _page_supports(item[2], habit, anchors))
+    ]
+    if supported:
         lines.append("From the books:")
-        for title, page, snippet in kept:
+        for title, page, snippet in supported:
             lines.append(f"• _{title}, p. {page}_: {snippet}")
     return "\n\n".join(lines).strip()
+
+
+def _evidence_answer(passages):
+    lines = ["The closest matching evidence in the local books is:"]
+    lines.extend(
+        f"• _{title}, p. {page}_: {snippet}"
+        for title, page, snippet in passages
+    )
+    lines.append(
+        "These are source excerpts, not a paraphrase; they support only what the "
+        "passages themselves state."
+    )
+    return "\n\n".join(lines)
 
 
 def _page_anchors(text):
@@ -352,19 +607,7 @@ def _comparison(lowered):
     known = _known_comparison(left, right)
     if known:
         return known
-    return (
-        f"What they are. {left} is one defined object or method. {right} is the other. "
-        f"I will not collapse them into one idea just because the question names both.\n\n"
-        f"Where they agree. Both earn a conclusion only after their definitions are met. "
-        f"A symbol such as → or ⊆ is just the sharp form of that requirement.\n\n"
-        f"Where they differ. {left} and {right} ask different questions, so a step that is valid for one can be invalid for the other.\n\n"
-        f"The tradeoff. {left} is the shorter path when its hypotheses are already given. "
-        f"{right} takes an extra step and is worth it when the short path is blocked.\n\n"
-        f"When one is preferable. I use {left} when the given information matches its hypotheses. "
-        f"I use {right} when those hypotheses are missing, or when the goal is a denial, a minimum, or a different structure.\n\n"
-        f"Why that conclusion. A preference without a matching definition is only a taste. "
-        f"The justified choice is the one whose hypotheses are actually in hand."
-    )
+    return None
 
 
 def _split_pair(lowered):

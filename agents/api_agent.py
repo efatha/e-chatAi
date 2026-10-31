@@ -144,7 +144,7 @@ class ApiAgent:
                 response = requests.post(
                     XAI_CHAT_URL,
                     headers={
-                        "Authorization": f"Bearer {key}",
+                        "Authorization": f"******",
                         "Content-Type": "application/json",
                     },
                     json=payload,

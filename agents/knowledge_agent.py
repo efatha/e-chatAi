@@ -34,7 +34,7 @@ SKIP_TERMS = {"the", "a", "an", "my", "your", "this", "that", "it", "me", "you"}
 
 
 def detect_lookup(message):
-    """Return {'kind': 'dictionary'|'topic', 'term': ...} when the user is looking something up."""
+    """Return {'kind': 'dictionary'|'topic', 'term': ...} for lookup questions."""
     text = (message or "").strip()
     if not text or len(text) > 180:
         return None
@@ -49,9 +49,7 @@ def detect_lookup(message):
     topic_match = TOPIC_RE.match(text)
     if topic_match:
         term = _clean_term(topic_match.group(1))
-        if not _usable_term(term):
-            return None
-        if _looks_like_math(term):
+        if not _usable_term(term) or _looks_like_math(term):
             return None
         kind = "dictionary" if len(term.split()) == 1 else "topic"
         return {"kind": kind, "term": term}
@@ -59,7 +57,7 @@ def detect_lookup(message):
 
 
 def lookup_answer(message, local_meanings=None):
-    """Dictionary, Wikipedia, and Ollama combined. None when this is not a lookup."""
+    """Combine dictionary, Wikipedia, and Ollama results for a lookup."""
     found = detect_lookup(message)
     if not found:
         return None
@@ -67,22 +65,15 @@ def lookup_answer(message, local_meanings=None):
     term = found["term"]
     single_word = len(term.split()) == 1
     local = _local_meaning(term, local_meanings or {}) if single_word else None
-    # A word you already taught wins. The public dictionary's first sense
-    # for "python" is the snake, which replaces your programming definition.
     if local and found["kind"] == "dictionary":
         return {"response": local, "source": "independent", "provider": "local"}
     dictionary = dictionary_entry(term) if single_word else None
-    # A meaning question should not fall through to a Wikipedia disambiguation
-    # page when this project already has a definition for that word.
     wiki = None
     if found["kind"] == "topic" or (not dictionary and not local):
         wiki = wikipedia_summary(term)
 
     notes = _reference_notes(dictionary, wiki)
-    ollama_text = None
-    if ollama_is_active():
-        ollama_text = ask_ollama(message, notes)
-
+    ollama_text = ask_ollama(message, notes) if ollama_is_active() else None
     combined = _combine(ollama_text, dictionary, wiki, include_wiki=not ollama_text)
     if combined:
         providers = []
@@ -118,7 +109,10 @@ def dictionary_entry(term):
     if " " in word or not word:
         return None
     try:
-        response = requests.get(DICTIONARY_URL.format(word=requests.utils.quote(word)), timeout=4)
+        response = requests.get(
+            DICTIONARY_URL.format(word=requests.utils.quote(word)),
+            timeout=4,
+        )
         if response.status_code == 404:
             return None
         if not response.ok:
@@ -150,7 +144,8 @@ def word_reference(word):
 def _wiktionary_definition(word):
     try:
         response = requests.get(
-            "https://en.wiktionary.org/api/rest_v1/page/definition/" + requests.utils.quote(word),
+            "https://en.wiktionary.org/api/rest_v1/page/definition/"
+            + requests.utils.quote(word),
             headers={"User-Agent": WIKI_USER_AGENT},
             timeout=6,
         )
@@ -171,9 +166,7 @@ def _wiktionary_definition(word):
                     lines.append(label + text)
             if count > 2:
                 break
-        if count == 0:
-            return None
-        return "\n".join(lines)
+        return "\n".join(lines) if count else None
     except requests.RequestException as exc:
         logger.warning("Wiktionary request failed: %s", type(exc).__name__)
         return None
@@ -234,9 +227,7 @@ def wikipedia_summary(term, question=""):
         if page is None:
             return None
         summary = _trim((page.summary or "").strip(), 700)
-        if not summary:
-            return None
-        return f"Wikipedia — {page.title}\n{summary}"
+        return f"Wikipedia — {page.title}\n{summary}" if summary else None
     except Exception as exc:
         logger.warning("Wikipedia request failed: %s", type(exc).__name__)
         return None
@@ -263,9 +254,9 @@ def _wrong_sense(summary, question):
     if "may refer to" in head or "disambiguation" in head:
         return True
     off = ("island", "snake", "genus", "species", "river", "mountain", "album", "film")
-    if any(word in head for word in off) and not any(word in question for word in off):
-        return True
-    return False
+    return any(word in head for word in off) and not any(
+        word in question for word in off
+    )
 
 
 def ollama_is_active():
@@ -296,7 +287,10 @@ def ask_ollama(message, notes):
                 "messages": [
                     {
                         "role": "system",
-                        "content": "You are e-Chat, an assistant created by Efatha Rutakaza. Answer directly.",
+                        "content": (
+                            "You are e-Chat, an assistant created by Efatha Rutakaza. "
+                            "Answer directly."
+                        ),
                     },
                     {"role": "user", "content": prompt},
                 ],
@@ -353,14 +347,11 @@ def _format_dictionary(payload):
                 lines.append(f"   Example: {example}")
         if count > 2:
             break
-    if count == 0:
-        return None
-    return "\n".join(lines)
+    return "\n".join(lines) if count else None
 
 
 def _reference_notes(dictionary, wiki):
-    parts = [part for part in (dictionary, wiki) if part]
-    return "\n\n".join(parts)
+    return "\n\n".join(part for part in (dictionary, wiki) if part)
 
 
 def _combine(ollama_text, dictionary, wiki, include_wiki):
@@ -378,9 +369,7 @@ def _local_meaning(term, word_meanings):
     if " " in term:
         return None
     meaning = word_meanings.get(term.lower())
-    if not meaning:
-        return None
-    return f"📖 {term.capitalize()}: {meaning}"
+    return f"📖 {term.capitalize()}: {meaning}" if meaning else None
 
 
 def _clean_term(term):
@@ -428,7 +417,7 @@ def looks_like_open_question(text):
 
 
 def search_result_text(question):
-    """Prefer the same public snippets used offline. Keep a hit only when it matches the question."""
+    """Retrieve public snippets and retain only those matching the question."""
     query = re.sub(r"\s+", " ", (question or "")).strip()
     if not query:
         return None
@@ -436,7 +425,10 @@ def search_result_text(question):
     found = _duckduckgo_snippets(query)
     lines = _matching(found, wanted) or found[:2]
     if not lines:
-        content = [word for word in wanted if word not in _NUMBER_WORDS and not word.isdigit()]
+        content = [
+            word for word in wanted
+            if word not in _NUMBER_WORDS and not word.isdigit()
+        ]
         lines = _matching(_wikipedia_snippet(query), content, minimum=2)
     if not lines:
         return None
@@ -481,15 +473,6 @@ def _question_words(query):
         if word.isdigit() or word in _NUMBER_WORDS or len(word) >= 4:
             words.append(word)
     return words
-
-
-def _word_hits(text, words):
-    lowered = (text or "").lower()
-    hits = 0
-    for word in words:
-        if re.search(rf"\b{re.escape(word)}s?\b", lowered):
-            hits += 1
-    return hits
 
 
 def _matching(lines, words, minimum=2):
@@ -565,7 +548,9 @@ def _wikipedia_snippet(query):
     except (requests.RequestException, ValueError):
         return []
     for page in pages.values():
-        extract = _finish_at_stop(re.sub(r"\s+", " ", page.get("extract") or "").strip())
+        extract = _finish_at_stop(
+            re.sub(r"\s+", " ", page.get("extract") or "").strip()
+        )
         title = page.get("title") or ""
         if len(extract) > 40:
             return [f"{title}. {extract}"]
@@ -576,7 +561,8 @@ def _clean_snippets(snippets):
     lines = []
     for raw in snippets:
         clean = re.sub(r"<[^>]+>", "", raw)
-        clean = clean.replace("&amp;", "&").replace("&quot;", '"').replace("&#39;", "'").replace("&#x27;", "'")
+        clean = clean.replace("&amp;", "&").replace("&quot;", '"')
+        clean = clean.replace("&#39;", "'").replace("&#x27;", "'")
         clean = re.sub(r"\s+", " ", clean).strip()
         clean = _finish_at_stop(clean)
         if len(clean) > 40 and clean not in lines:
@@ -587,7 +573,7 @@ def _clean_snippets(snippets):
 
 
 def _finish_at_stop(text):
-    """End on the last full sentence. Drop a trailing fragment such as 'and ...'."""
+    """End on the last full sentence and drop a trailing fragment."""
     original = text or ""
     cut = re.sub(r"(?:\s*(?:\.\.\.|…))+\s*$", "", original).strip()
     stops = list(re.finditer(r"[.!?]", cut))
