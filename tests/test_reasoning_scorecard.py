@@ -11,6 +11,7 @@ from agents.book_agent import (
     _page_anchors,
     _page_supports,
 )
+from agents.reasoning_patterns import pattern_answer
 
 
 class ReasoningScorecardTests(unittest.TestCase):
@@ -118,6 +119,60 @@ class ReasoningScorecardTests(unittest.TestCase):
         self.assertIn("2(m + n + 1)", result["response"])
         self.assertNotIn("Incorrect word-definition fallback", result["response"])
 
+    def test_difference_of_definitions_uses_live_wikipedia_comparison(self):
+        questions = (
+            "What is the difference of Python and Java?",
+            "What is the difference between Python and Java?",
+        )
+        api = SimpleNamespace(retrieve=lambda *_args, **_kwargs: None)
+        independent = SimpleNamespace(
+            confident_answer=lambda *_args, **_kwargs: "Incorrect local fallback"
+        )
+        books = SimpleNamespace(
+            answer=lambda *_args, **_kwargs: self.fail(
+                "Definition comparisons must use the live-Wikipedia formatter first"
+            )
+        )
+
+        for question in questions:
+            with self.subTest(question=question):
+                def wikipedia_note(term, _question):
+                    notes = {
+                        "python": (
+                            "Wikipedia — Python\n"
+                            "Python is a high-level, general-purpose programming language. "
+                            "It emphasizes readability."
+                        ),
+                        "java": (
+                            "Wikipedia — Java\n"
+                            "Java is a class-based, object-oriented programming language. "
+                            "It runs on a virtual machine."
+                        ),
+                    }
+                    return notes.get(term.lower())
+
+                with (
+                    patch.object(router, "_independent_agent", independent),
+                    patch.object(router, "_api_agent", api),
+                    patch.object(router, "_book_agent", books),
+                    patch.object(router, "wikipedia_summary", side_effect=wikipedia_note) as wiki,
+                ):
+                    result = router.answer_question(question)
+
+                self.assertEqual(result["source"], "pattern")
+                self.assertEqual(result["provider"], "reasoning-pattern")
+                self.assertEqual(
+                    [call.args[0] for call in wiki.call_args_list],
+                    ["python", "java"],
+                )
+                self.assertIn("Python is a high-level", result["response"])
+                self.assertIn("Java is a class-based", result["response"])
+                self.assertIn("- What they are:\n  - *Python*:", result["response"])
+                self.assertIn("- Advantages:\n  - *Python*:", result["response"])
+                self.assertIn("\n\n- Limitations:\n  - *Python*:", result["response"])
+                self.assertIn("\n\nSources used for this comparison:\n- python:", result["response"])
+                self.assertIn("Sources used for this comparison:", result["response"])
+
     def test_sqrt_two_citation_requires_specific_supporting_evidence(self):
         anchors = _page_anchors("Prove that the square root of 2 is irrational")
         relevant = (
@@ -154,6 +209,90 @@ class ReasoningScorecardTests(unittest.TestCase):
             }],
         }]
         self.assertEqual(self.agent._from_each_book(question), [])
+
+    def test_induction_proves_the_identity_that_was_asked(self):
+        answer = self.answer(
+            "Prove by induction that 1 + 2 + … + n = n(n+1)/2."
+        )
+        self.assertIn("Base case (n = 1)", answer)
+        self.assertIn("Inductive hypothesis", answer)
+        self.assertIn("(k + 1)(k + 2)/2", answer)
+        self.assertIn("holds for every integer n ≥ 1", answer)
+        self.assertNotIn("From the books:", answer)
+
+    def test_induction_does_not_substitute_a_different_formula(self):
+        answer = self.answer(
+            "Prove by induction that 6 + 3 + … + n = n(n+8)/1."
+        )
+        self.assertIn("verify this induction claim as written", answer)
+        self.assertIn("exact sequence", answer)
+        self.assertNotIn("n(n + 1)/2", answer)
+        self.assertNotIn("Base case", answer)
+
+    def test_unspecified_induction_claim_asks_for_the_proposition(self):
+        answer = self.answer("Explain how to prove this by induction.")
+        self.assertIn("state the exact proposition P(n)", answer)
+
+    def test_conditional_is_false_only_for_true_p_and_false_q(self):
+        answer = self.answer("When is P → Q false?")
+        self.assertIn("P is true and Q is false", answer)
+        self.assertIn("implication is true", answer)
+
+    def test_subset_example_includes_a_counterexample(self):
+        answer = self.answer("Give an example of subsets")
+        self.assertIn("{1, 2} ⊆ {1, 2, 3}", answer)
+        self.assertIn("{1, 4} ⊄ {1, 2, 3}", answer)
+        self.assertIn("4 is missing", answer)
+
+    def test_rank_nullity_defines_each_term(self):
+        answer = self.answer("State the rank-nullity theorem and explain each term.")
+        self.assertIn("dim(V) = rank(T) + nullity(T)", answer)
+        self.assertIn("dim(im(T))", answer)
+        self.assertIn("dim(ker(T))", answer)
+        self.assertIn("number of columns", answer)
+
+    def test_basis_requires_independence_and_spanning(self):
+        answer = self.answer("What makes a set of vectors a basis?")
+        self.assertIn("spans the space", answer)
+        self.assertIn("linearly independent", answer)
+        self.assertIn("unique coordinate", answer)
+
+    def test_convex_set_definition_includes_example_and_nonexample(self):
+        answer = self.answer("Define a convex set.")
+        self.assertIn("t ∈ [0, 1]", answer)
+        self.assertIn("[0, 1] is convex", answer)
+        self.assertIn("{0, 1} is not convex", answer)
+
+    def test_valid_and_sound_argument_comparison_is_defined(self):
+        result = pattern_answer(
+            "What’s the difference between a valid argument and a sound argument?",
+            notes={},
+        )
+        self.assertIsNotNone(result)
+        answer = result["response"]
+        self.assertIn("conclusion must be true if all the premises are true", answer)
+        self.assertIn("valid and also has premises that are actually true", answer)
+        self.assertIn("Every sound argument is valid", answer)
+        self.assertNotIn("I do not have a source page", answer)
+
+    def test_valid_sound_comparison_still_uses_live_wikipedia_route(self):
+        api = SimpleNamespace(retrieve=lambda *_args, **_kwargs: None)
+        independent = SimpleNamespace(
+            confident_answer=lambda *_args, **_kwargs: "Incorrect local fallback"
+        )
+        with (
+            patch.object(router, "_independent_agent", independent),
+            patch.object(router, "_api_agent", api),
+            patch.object(router, "_book_agent", self.agent),
+            patch.object(router, "wikipedia_summary", return_value=None) as wiki,
+        ):
+            result = router.answer_question(
+                "What’s the difference between a valid argument and a sound argument?"
+            )
+        self.assertEqual(result["source"], "pattern")
+        self.assertEqual(wiki.call_count, 2)
+        self.assertIn("Every sound argument is valid", result["response"])
+        self.assertNotIn("not sure", result["response"].lower())
 
 
 if __name__ == "__main__":

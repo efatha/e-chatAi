@@ -37,11 +37,13 @@ Run the local reasoning regression set with:
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
 
-The scorecard checks parity proofs and counterexamples, paraphrase handling,
-unsupported-proof abstention, and whether book citations support the claim.
-These tests run without external services. Passing them verifies these specific
-cases; it does not measure general knowledge or train a model.
+The scorecard checks parity proofs and counterexamples, induction claims,
+elementary logic, selected linear-algebra and convexity definitions, comparison
+formatting, unsupported-proof abstention, and whether book citations support the
+claim. These tests run without external services. Passing them verifies these
+specific cases; it does not measure general knowledge or train a model.
 
-Current acceptance targets are 100% on the included deterministic proof and
-counterexample cases, no fabricated proof for an unsupported theorem, and no
-citation for a table of contents, index entry, or unrelated passage.
+Current acceptance targets are 100% on the included deterministic proof,
+counterexample, and definition cases; no fabricated proof for a malformed or
+unsupported induction claim; and no citation for a table of contents, index
+entry, or unrelated passage.

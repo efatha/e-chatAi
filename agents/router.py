@@ -248,6 +248,17 @@ def answer_question(message, username=None, history=None, file=None):
                     "provider": "wikipedia",
                 }
 
+    comparison_terms = concept_terms(text) if text and not has_file else None
+    if comparison_terms and len(comparison_terms) == 2:
+        notes = {
+            term: wikipedia_summary(term, text)
+            for term in comparison_terms
+        }
+        patterned = pattern_answer(text, notes)
+        if patterned:
+            patterned["response"] = _with_name(patterned["response"], username)
+            return patterned
+
     if text and not has_file and looks_like_reasoning(text):
         from_books = book_agent().answer(text)
         if from_books:

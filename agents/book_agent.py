@@ -102,7 +102,10 @@ class BookAgent:
 
     def _from_each_book(self, message):
         """Top passages by how rare the question's words are in that page."""
-        if _parity_habit((message or "").lower()):
+        if (
+            _parity_habit((message or "").lower())
+            or _induction_habit((message or "").lower())
+        ):
             return []
         query = _tokens(message)
         if "statistic" in (message or "").lower():
@@ -463,6 +466,18 @@ def _proof_habit(text):
     if compared:
         return compared
 
+    induction = _induction_habit(lowered)
+    if induction:
+        return induction
+
+    truth_condition = _conditional_truth_condition(lowered)
+    if truth_condition:
+        return truth_condition
+
+    concept = _logic_concept(lowered)
+    if concept:
+        return concept
+
     parity = _parity_habit(lowered)
     if parity:
         return parity
@@ -533,13 +548,6 @@ def _proof_habit(text):
             "Given P ∨ Q, and both P → R and Q → R, conclude R.\n"
             "For an integer n, the cases n even and n odd cover every integer, so a claim proved in both cases holds for all n."
         )
-    if "induction" in lowered:
-        return (
-            "Given a statement P(n) for integers n ≥ 1. Goal: ∀n P(n).\n"
-            "Base: P(1). Inductive step: P(k) → P(k+1).\n"
-            "For Σ_{i=1}^{n} i = n(n+1)/2, P(1) is 1 = 1. "
-            "If the sum to k equals k(k+1)/2, the sum to k+1 equals that plus (k+1) = (k+1)(k+2)/2. ∴ P(k+1)."
-        )
     if "subspace" in lowered and ("zero" in lowered or "0" in lowered):
         return (
             "Take any vector v in the subspace. "
@@ -549,7 +557,11 @@ def _proof_habit(text):
     if "subset" in lowered or "∈" in text or "⊆" in text:
         example = ""
         if "example" in lowered:
-            example = " Example: {1} ⊆ {1, 2}, because the only member of {1} is also a member of {1, 2}."
+            example = (
+                "\n\nExample. {1, 2} ⊆ {1, 2, 3}, because each element of the first "
+                "set is in the second.\n"
+                "Non-example. {1, 4} ⊄ {1, 2, 3}, because 4 is missing from the second set."
+            )
         return (
             "Rule: subset. x ∈ A means x is a member of A. A ⊆ B means ∀x (x ∈ A → x ∈ B).\n"
             "To prove A ⊆ B, let x be arbitrary, assume x ∈ A, and show x ∈ B. "
@@ -568,6 +580,86 @@ def _proof_habit(text):
             "Rule: direct proof. P is Even(a) and Even(b). Q is Even(a+b).\n"
             "Given Even(a) ∧ Even(b). Then a = 2m and b = 2n, so a + b = 2(m+n). "
             "m+n ∈ Z, hence Even(a+b). ∴ the sum of two even integers is even."
+        )
+    return None
+
+
+def _induction_habit(lowered):
+    if "induction" not in lowered:
+        return None
+
+    normalized = re.sub(r"\s+", "", lowered).replace("…", "...")
+    sum_formula = re.search(
+        r"1\+2\+\.{3,}\+n=n\(n\+1\)/2",
+        normalized,
+    )
+    if sum_formula:
+        return (
+            "Let P(n) be 1 + 2 + … + n = n(n + 1)/2.\n\n"
+            "- Base case (n = 1): 1 = 1(2)/2 = 1, so P(1) holds.\n"
+            "- Inductive hypothesis: assume P(k), so 1 + 2 + … + k = k(k + 1)/2.\n"
+            "- Inductive step:\n"
+            "  1 + 2 + … + k + (k + 1)\n"
+            "  = k(k + 1)/2 + (k + 1)\n"
+            "  = (k + 1)(k + 2)/2.\n"
+            "- This is P(k + 1). Therefore, by induction, the formula holds for every integer n ≥ 1."
+        )
+
+    if "..." in normalized:
+        return (
+            "I can’t verify this induction claim as written because the ellipsis does not "
+            "specify the terms or the stopping index. Please give the exact sequence, "
+            "the first value of n, and the proposed right-hand side."
+        )
+    return (
+        "Please state the exact proposition P(n) you want to prove. An induction proof "
+        "needs a starting value and a rule that takes P(k) to P(k + 1)."
+    )
+
+
+def _conditional_truth_condition(lowered):
+    implication = re.search(r"\bp\s*(?:→|->|implies)\s*q\b", lowered)
+    asks_when = re.search(r"\b(when|under what conditions|which row)\b", lowered)
+    asks_false = re.search(r"\b(false|falsity)\b", lowered)
+    if implication and asks_when and asks_false:
+        return (
+            "P → Q is false in exactly one case: P is true and Q is false. "
+            "If P is false, or if Q is true, the implication is true."
+        )
+    return None
+
+
+def _logic_concept(lowered):
+    if "rank-nullity" in lowered or "rank nullity" in lowered:
+        return (
+            "Rank–nullity theorem. For a linear map T: V → W with finite-dimensional "
+            "domain V, dim(V) = rank(T) + nullity(T).\n\n"
+            "- rank(T) is dim(im(T)), the dimension of the output space reached by T.\n"
+            "- nullity(T) is dim(ker(T)), the dimension of the inputs sent to zero.\n"
+            "- For an m × n matrix A, rank(A) + nullity(A) = n, the number of columns."
+        )
+
+    if "basis" in lowered and re.search(r"\b(vectors?|space|span|independent)\b", lowered):
+        return (
+            "A basis of a vector space is a set of vectors that both spans the space "
+            "and is linearly independent.\n\n"
+            "- Spanning means every vector in the space can be written as a linear "
+            "combination of the basis vectors.\n"
+            "- Linear independence means no basis vector is redundant: only the "
+            "trivial combination equals zero.\n"
+            "- Together, these properties give every vector a unique coordinate "
+            "representation in that basis."
+        )
+
+    if "convex set" in lowered or ("convex" in lowered and "line segment" in lowered):
+        return (
+            "A set C is convex if, for every x, y ∈ C and every t ∈ [0, 1], "
+            "(1 − t)x + ty ∈ C. In plain language, the entire line segment between "
+            "any two points in C stays inside C.\n\n"
+            "Example: the interval [0, 1] is convex; every point between any two "
+            "members is still in the interval. Non-example: {0, 1} is not convex, "
+            "because the segment between 0 and 1 contains points such as 1/2 that "
+            "are not in the set."
         )
     return None
 
