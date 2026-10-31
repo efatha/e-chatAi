@@ -87,18 +87,26 @@ class BookAgent:
             return None
 
         habit = _proof_habit(text)
+        if not habit:
+            return None
         passages = self._from_each_book(text)
         response = _speak(text, habit, passages)
         if not response:
             return None
+        cited = "\n\nFrom the books:" in response
         return {
             "response": response,
-            "source": "book",
-            "provider": "both-books",
+            "source": "book" if cited else "reasoning",
+            "provider": "local-rules+books" if cited else "local-rules",
         }
 
     def _from_each_book(self, message):
         """Top passages by how rare the question's words are in that page."""
+        if (
+            _parity_habit((message or "").lower())
+            or _induction_habit((message or "").lower())
+        ):
+            return []
         query = _tokens(message)
         if "statistic" in (message or "").lower():
             query = set(query) | {"probability", "statistics"}
@@ -109,6 +117,8 @@ class BookAgent:
         for book in self.books:
             best = None
             for chunk in book["chunks"]:
+                if _navigation_chunk(chunk["text"]):
+                    continue
                 if not _on_topic(message, book["title"], chunk["text"]):
                     continue
                 score = _tfidf(query, chunk["tokens"], self._idf)
@@ -245,11 +255,38 @@ def _page_supports(snippet, conclusion, anchors):
     words = [word for word in _tokens(conclusion) if len(word) >= 4]
     lowered = (snippet or "").lower()
     hits = sum(1 for word in words if word in lowered)
-    if hits < 2:
+    if hits < 2 or hits / max(1, len(words)) < 0.35:
         return False
-    if anchors and not any(anchor in lowered for anchor in anchors):
-        return False
+    if anchors:
+        anchor_hits = sum(
+            anchor in lowered
+            for anchor in anchors
+            if anchor not in {"__sqrt2__", "__coprime__"}
+        )
+        if "__sqrt2__" in anchors:
+            anchor_hits += int(any(
+                marker in lowered
+                for marker in ("√2", "sqrt(2)", "square root of 2")
+            ))
+        if "__coprime__" in anchors:
+            anchor_hits += int(any(
+                marker in lowered
+                for marker in ("lowest terms", "coprime")
+            ))
+        if anchor_hits < min(3, len(anchors)):
+            return False
     return True
+
+
+def _navigation_chunk(text):
+    """Reject table-of-contents fragments that match terms but do not explain them."""
+    content = text or ""
+    section_entries = re.findall(r"\b\d+(?:\.\d+){1,2}\.?\s+[A-Z]", content)
+    page_references = re.findall(r"\b(?:[A-Z]-\d+|\d{1,4})\b", content)
+    return (
+        len(section_entries) >= 3
+        or (len(page_references) >= 8 and content.count(",") >= 5)
+    )
 
 
 def _speak(text, habit, passages):
@@ -272,16 +309,22 @@ def _speak(text, habit, passages):
 
 def _page_anchors(text):
     lowered = (text or "").lower()
+    if "√2" in text or "sqrt(2)" in lowered or "square root of 2" in lowered:
+        return ("__sqrt2__", "__coprime__")
     if "contrapositive" in lowered:
-        return ("contrapositive",)
+        return ("contrapositive", "direct proof")
     if "converse" in lowered:
         return ("converse",)
     if "subspace" in lowered or "zero vector" in lowered:
         return ("closed", "scalar")
     if "subset" in lowered:
         return ("subset",)
+    if "square" in lowered or "squared" in lowered or "²" in text:
+        return ("square",)
+    if "sum" in lowered or re.search(r"\b(plus|adding)\b", lowered):
+        return ("sum",)
     if "even" in lowered and re.search(r"\b(prove|show that)\b", lowered):
-        return ("even", "sum")
+        return ("even",)
     if "priority" in lowered or "statistic" in lowered:
         return ("probability", "statistic")
     return ()
@@ -423,6 +466,22 @@ def _proof_habit(text):
     if compared:
         return compared
 
+    induction = _induction_habit(lowered)
+    if induction:
+        return induction
+
+    truth_condition = _conditional_truth_condition(lowered)
+    if truth_condition:
+        return truth_condition
+
+    concept = _logic_concept(lowered)
+    if concept:
+        return concept
+
+    parity = _parity_habit(lowered)
+    if parity:
+        return parity
+
     if "truth table" in lowered:
         return (
             "Given a formula built from P and Q. Goal: the rows where it is true.\n"
@@ -478,21 +537,16 @@ def _proof_habit(text):
     if "contradiction" in lowered or "irrational" in lowered or "square root of 2" in lowered or "sqrt(2)" in lowered or "√2" in text:
         return (
             "To prove R, assume ¬R and reach S ∧ ¬S.\n"
-            "Assume √2 = a/b in lowest terms. Then a² = 2b², so a is even, a = 2k, hence b² = 2k², so b is even. "
-            "Thus 2 | a and 2 | b, contradicting lowest terms. ∴ √2 is irrational."
+            "Assume √2 = a/b for coprime positive integers a and b. Then a² = 2b² is even, "
+            "so a is even: an odd integer has an odd square. Write a = 2k. Substitution gives "
+            "b² = 2k², so b is even for the same reason. Now a and b share the factor 2, "
+            "contradicting that they are coprime. ∴ √2 is irrational."
         )
     if "cases" in lowered:
         return (
             "A proof by cases splits the hypothesis into an exhaustive list.\n"
             "Given P ∨ Q, and both P → R and Q → R, conclude R.\n"
             "For an integer n, the cases n even and n odd cover every integer, so a claim proved in both cases holds for all n."
-        )
-    if "induction" in lowered:
-        return (
-            "Given a statement P(n) for integers n ≥ 1. Goal: ∀n P(n).\n"
-            "Base: P(1). Inductive step: P(k) → P(k+1).\n"
-            "For Σ_{i=1}^{n} i = n(n+1)/2, P(1) is 1 = 1. "
-            "If the sum to k equals k(k+1)/2, the sum to k+1 equals that plus (k+1) = (k+1)(k+2)/2. ∴ P(k+1)."
         )
     if "subspace" in lowered and ("zero" in lowered or "0" in lowered):
         return (
@@ -503,7 +557,11 @@ def _proof_habit(text):
     if "subset" in lowered or "∈" in text or "⊆" in text:
         example = ""
         if "example" in lowered:
-            example = " Example: {1} ⊆ {1, 2}, because the only member of {1} is also a member of {1, 2}."
+            example = (
+                "\n\nExample. {1, 2} ⊆ {1, 2, 3}, because each element of the first "
+                "set is in the second.\n"
+                "Non-example. {1, 4} ⊄ {1, 2, 3}, because 4 is missing from the second set."
+            )
         return (
             "Rule: subset. x ∈ A means x is a member of A. A ⊆ B means ∀x (x ∈ A → x ∈ B).\n"
             "To prove A ⊆ B, let x be arbitrary, assume x ∈ A, and show x ∈ B. "
@@ -523,14 +581,205 @@ def _proof_habit(text):
             "Given Even(a) ∧ Even(b). Then a = 2m and b = 2n, so a + b = 2(m+n). "
             "m+n ∈ Z, hence Even(a+b). ∴ the sum of two even integers is even."
         )
-    if re.search(r"\b(prove|show that|direct proof|symbol)\b", lowered):
+    return None
+
+
+def _induction_habit(lowered):
+    if "induction" not in lowered:
+        return None
+
+    normalized = re.sub(r"\s+", "", lowered).replace("…", "...")
+    sum_formula = re.search(
+        r"1\+2\+\.{3,}\+n=n\(n\+1\)/2",
+        normalized,
+    )
+    if sum_formula:
         return (
-            "Structured proof, the way both books train it.\n"
-            "Given: the hypotheses. Goal: the claim.\n"
-            "Write the goal as symbols (→, ↔, ∀, ∃, ∈, ⊆) before the prose. "
-            "Each line is either given, a definition, or a consequence of earlier lines. The last line is the goal."
+            "Let P(n) be 1 + 2 + … + n = n(n + 1)/2.\n\n"
+            "- Base case (n = 1): 1 = 1(2)/2 = 1, so P(1) holds.\n"
+            "- Inductive hypothesis: assume P(k), so 1 + 2 + … + k = k(k + 1)/2.\n"
+            "- Inductive step:\n"
+            "  1 + 2 + … + k + (k + 1)\n"
+            "  = k(k + 1)/2 + (k + 1)\n"
+            "  = (k + 1)(k + 2)/2.\n"
+            "- This is P(k + 1). Therefore, by induction, the formula holds for every integer n ≥ 1."
+        )
+
+    if "..." in normalized:
+        return (
+            "I can’t verify this induction claim as written because the ellipsis does not "
+            "specify the terms or the stopping index. Please give the exact sequence, "
+            "the first value of n, and the proposed right-hand side."
+        )
+    return (
+        "Please state the exact proposition P(n) you want to prove. An induction proof "
+        "needs a starting value and a rule that takes P(k) to P(k + 1)."
+    )
+
+
+def _conditional_truth_condition(lowered):
+    implication = re.search(r"\bp\s*(?:→|->|implies)\s*q\b", lowered)
+    asks_when = re.search(r"\b(when|under what conditions|which row)\b", lowered)
+    asks_false = re.search(r"\b(false|falsity)\b", lowered)
+    if implication and asks_when and asks_false:
+        return (
+            "P → Q is false in exactly one case: P is true and Q is false. "
+            "If P is false, or if Q is true, the implication is true."
         )
     return None
+
+
+def _logic_concept(lowered):
+    if "rank-nullity" in lowered or "rank nullity" in lowered:
+        return (
+            "Rank–nullity theorem. For a linear map T: V → W with finite-dimensional "
+            "domain V, dim(V) = rank(T) + nullity(T).\n\n"
+            "- rank(T) is dim(im(T)), the dimension of the output space reached by T.\n"
+            "- nullity(T) is dim(ker(T)), the dimension of the inputs sent to zero.\n"
+            "- For an m × n matrix A, rank(A) + nullity(A) = n, the number of columns."
+        )
+
+    if "basis" in lowered and re.search(r"\b(vectors?|space|span|independent)\b", lowered):
+        return (
+            "A basis of a vector space is a set of vectors that both spans the space "
+            "and is linearly independent.\n\n"
+            "- Spanning means every vector in the space can be written as a linear "
+            "combination of the basis vectors.\n"
+            "- Linear independence means no basis vector is redundant: only the "
+            "trivial combination equals zero.\n"
+            "- Together, these properties give every vector a unique coordinate "
+            "representation in that basis."
+        )
+
+    if "convex set" in lowered or ("convex" in lowered and "line segment" in lowered):
+        return (
+            "A set C is convex if, for every x, y ∈ C and every t ∈ [0, 1], "
+            "(1 − t)x + ty ∈ C. In plain language, the entire line segment between "
+            "any two points in C stays inside C.\n\n"
+            "Example: the interval [0, 1] is convex; every point between any two "
+            "members is still in the interval. Non-example: {0, 1} is not convex, "
+            "because the segment between 0 and 1 contains points such as 1/2 that "
+            "are not in the set."
+        )
+    return None
+
+
+def _parity_habit(lowered):
+    """Prove or refute common parity claims from their actual operands."""
+    square = re.search(r"\b(square|squared)\b|²|\*\*2", lowered)
+    if square:
+        parities = re.findall(r"\b(even|odd)\b", lowered)
+        if len(parities) >= 2:
+            operand, claimed = parities[0], parities[-1]
+            actual = operand
+            if claimed != actual:
+                witness = "n = 2, so n² = 4 is even" if operand == "even" else "n = 1, so n² = 1 is odd"
+                return (
+                    f"The claim is false. Counterexample: {witness}; "
+                    f"that contradicts the claim that an {operand} integer has an {claimed} square."
+                )
+            if operand == "even":
+                return (
+                    "Let n be an even integer, so n = 2k for some integer k. "
+                    "Then n² = (2k)² = 4k² = 2(2k²). Since 2k² is an integer, "
+                    "n² is even."
+                )
+            return (
+                "Let n be an odd integer, so n = 2k + 1 for some integer k. "
+                "Then n² = (2k + 1)² = 4k² + 4k + 1 = 2(2k² + 2k) + 1. "
+                "Since 2k² + 2k is an integer, n² is odd."
+            )
+
+    operation = None
+    pair = None
+    for candidate, pattern in (
+        ("sum", r"\b(?:sum|adding|addition)\b|\+"),
+        ("product", r"\b(?:product|multiplying|multiplication|times)\b|[×*]"),
+    ):
+        if not re.search(pattern, lowered):
+            continue
+        operation = candidate
+        pair_patterns = (
+            r"\b(even|odd)\s*(?:\+|×|\*)\s*(even|odd)\b",
+            rf"\b(?:sum|product)\s+of\s+(?:two\s+)?(?:an?\s+)?(even|odd)\b"
+            r"(?:\s+integers?|\s+numbers?)?\s+and\s+(?:two\s+)?(?:an?\s+)?(even|odd)\b",
+            rf"\b(?:sum|product)\s+of\s+two\s+(even|odd)\b"
+            r"(?:\s+integers?|\s+numbers?)?",
+            rf"\b(?:adding|multiplying)\s+(?:two\s+)?(?:an?\s+)?(even|odd)\b"
+            r"(?:\s+integers?|\s+numbers?)?\s+and\s+(?:two\s+)?(?:an?\s+)?(even|odd)\b",
+            rf"\b(?:adding|multiplying)\s+two\s+(even|odd)\b"
+            r"(?:\s+integers?|\s+numbers?)?",
+        )
+        for pair_pattern in pair_patterns:
+            match = re.search(pair_pattern, lowered)
+            if match:
+                right = match.group(2) if match.lastindex and match.lastindex > 1 else None
+                pair = (match.group(1), right or match.group(1))
+                remainder = lowered[match.end():]
+                result_match = re.search(r"\b(even|odd)\b", remainder)
+                if not result_match:
+                    return None
+                claimed = result_match.group(1)
+                break
+        if pair:
+            break
+        operation = None
+
+    if not pair or not operation:
+        return None
+
+    left, right = pair
+    if operation == "sum":
+        actual = "even" if left == right else "odd"
+    else:
+        actual = "even" if "even" in pair else "odd"
+
+    if claimed != actual:
+        examples = {
+            ("sum", "even", "even"): "2 + 4 = 6",
+            ("sum", "odd", "odd"): "1 + 1 = 2",
+            ("sum", "even", "odd"): "2 + 1 = 3",
+            ("sum", "odd", "even"): "1 + 2 = 3",
+            ("product", "odd", "odd"): "3 × 5 = 15",
+            ("product", "even", "odd"): "2 × 3 = 6",
+            ("product", "odd", "even"): "3 × 2 = 6",
+            ("product", "even", "even"): "2 × 4 = 8",
+        }
+        example = examples[(operation, left, right)]
+        return (
+            f"The claim is false. Counterexample: {example}, which is {actual}, "
+            f"not {claimed}."
+        )
+
+    if operation == "sum" and left == right == "even":
+        return (
+            "Let a = 2m and b = 2n for integers m and n. Then "
+            "a + b = 2m + 2n = 2(m + n). Since m + n is an integer, "
+            "the sum of two even integers is even."
+        )
+    if operation == "sum" and left == right == "odd":
+        return (
+            "Let a = 2m + 1 and b = 2n + 1 for integers m and n. Then "
+            "a + b = 2m + 2n + 2 = 2(m + n + 1). Since m + n + 1 is an integer, "
+            "the sum of two odd integers is even."
+        )
+    if operation == "sum":
+        return (
+            "Let the even integer be 2m and the odd integer be 2n + 1, "
+            "where m and n are integers. Their sum is 2m + 2n + 1 = "
+            "2(m + n) + 1, so the sum is odd."
+        )
+    if left == right == "odd":
+        return (
+            "Let a = 2m + 1 and b = 2n + 1 for integers m and n. Then "
+            "ab = (2m + 1)(2n + 1) = 2(2mn + m + n) + 1. "
+            "The quantity in parentheses is an integer, so the product is odd."
+        )
+    return (
+        "One factor is even, so write it as 2m for an integer m and call the "
+        "other integer n. Their product is (2m)n = 2(mn). Since mn is an "
+        "integer, the product is even."
+    )
 
 
 def _is_reasoning_question(text):

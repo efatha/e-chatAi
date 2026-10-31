@@ -107,7 +107,7 @@ def _accepted_definition(text, history, independent):
     return found
 
 
-def answer_question(message, username=None, history=None, file=None):
+def answer_question(message, username=None, history=None, file=None, conversation=None):
     """
     Math, greetings, and trained facts stay local.
     A word or topic lookup uses the dictionary and Wikipedia, and Ollama
@@ -248,6 +248,23 @@ def answer_question(message, username=None, history=None, file=None):
                     "provider": "wikipedia",
                 }
 
+    comparison_terms = concept_terms(text) if text and not has_file else None
+    if comparison_terms and len(comparison_terms) == 2:
+        notes = {
+            term: wikipedia_summary(term, text)
+            for term in comparison_terms
+        }
+        patterned = pattern_answer(text, notes)
+        if patterned:
+            patterned["response"] = _with_name(patterned["response"], username)
+            return patterned
+
+    if text and not has_file and looks_like_reasoning(text):
+        from_books = book_agent().answer(text)
+        if from_books:
+            from_books["response"] = _with_name(from_books["response"], username)
+            return from_books
+
     if text and not has_file and independent is not None:
         local = independent.confident_answer(text, username, history)
         if local:
@@ -272,12 +289,6 @@ def answer_question(message, username=None, history=None, file=None):
                 knowledge["response"] = _with_name(knowledge["response"], username)
                 return knowledge
 
-    if text and not has_file and looks_like_reasoning(text):
-        from_books = book_agent().answer(text)
-        if from_books:
-            from_books["response"] = _with_name(from_books["response"], username)
-            return from_books
-
     if text and not has_file:
         meanings = independent.word_meanings if independent is not None else {}
         knowledge = lookup_answer(text, meanings)
@@ -298,7 +309,11 @@ def answer_question(message, username=None, history=None, file=None):
                 return from_books
 
     prompt = text or "Describe this image."
-    api_result = api.retrieve(prompt, history, file if has_file else None)
+    api_result = api.retrieve(
+        prompt,
+        conversation if conversation is not None else history,
+        file if has_file else None,
+    )
     if api_result:
         return api_result
 

@@ -16,7 +16,7 @@ Preferred Language: For multilingual support.
 Once the form is submitted, users will be directed to the interactive AI platform, where they can access e-Chat’s full capabilities.
 
 ## Key Features
-Custom-Built AI Model: e-Chat leverages powerful machine learning frameworks to provide human-like conversational experiences.
+Local Reasoning and Retrieval: e-Chat combines deterministic Python reasoning, locally indexed book excerpts, and optional local or hosted language models. The rule-based reasoning is not model training.
 Advanced Research Capabilities: Optimized to assist users in academic, scientific, and technical research, offering in-depth analysis and resourceful insights.
 Natural Language Understanding: Supports a wide range of languages, enabling seamless communication and understanding of complex queries.
 Extensibility: Open to integration with external APIs, databases, and research tools to enhance its capabilities.
@@ -28,3 +28,22 @@ Multilingual Capabilities
 Extensible and Scalable
 ## Technology Stack
 Frontend: Python, Vanilla JavaScript, HTML(Flask), CSS
+
+## Offline reasoning scorecard
+
+Run the local reasoning regression set with:
+
+```powershell
+.\.venv\Scripts\python.exe -m unittest discover -s tests -v
+```
+
+The scorecard checks parity proofs and counterexamples, induction claims,
+elementary logic, selected linear-algebra and convexity definitions, comparison
+formatting, unsupported-proof abstention, and whether book citations support the
+claim. These tests run without external services. Passing them verifies these
+specific cases; it does not measure general knowledge or train a model.
+
+Current acceptance targets are 100% on the included deterministic proof,
+counterexample, and definition cases; no fabricated proof for a malformed or
+unsupported induction claim; and no citation for a table of contents, index
+entry, or unrelated passage.

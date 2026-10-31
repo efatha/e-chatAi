@@ -82,20 +82,30 @@ def _chat_turn():
 
     conversation_id = _conversation_id(data.get("conversation_id"))
     if not memory.recent(conversation_id, limit=1):
-        for item in browser_memory[-40:]:
+        recent_browser_messages = browser_memory[-40:]
+        for index, item in enumerate(recent_browser_messages):
             if not isinstance(item, dict):
                 continue
             role = item.get("role")
             content = item.get("content")
             if role in {"user", "assistant"} and isinstance(content, str):
+                if (
+                    index == len(recent_browser_messages) - 1
+                    and role == "user"
+                    and content.strip() == message
+                ):
+                    continue
                 memory.add(conversation_id, role, content)
-    if message:
+    recent = memory.recent(conversation_id, limit=1)
+    if message and not (
+        recent
+        and recent[-1]["role"] == "user"
+        and recent[-1]["content"] == message
+    ):
         memory.add(conversation_id, "user", message)
 
-    history = [
-        item["content"]
-        for item in memory.recent(conversation_id, limit=20, role="user")
-    ]
+    conversation = memory.recent(conversation_id, limit=20)
+    history = [item["content"] for item in conversation if item["role"] == "user"]
 
     recalled = memory.recall(conversation_id, message) if message and not has_file else None
     if recalled:
@@ -110,6 +120,7 @@ def _chat_turn():
             username=session.get("username"),
             history=history,
             file=file,
+            conversation=conversation,
         )
     if result.get("response"):
         memory.add(conversation_id, "assistant", result["response"])

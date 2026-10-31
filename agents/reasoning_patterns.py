@@ -61,6 +61,18 @@ def _comparison(lowered, text, notes):
     if not pair:
         return None
     left, right = pair
+    names = {_comparison_name(left), _comparison_name(right)}
+    if names == {"valid argument", "sound argument"}:
+        return (
+            "A valid argument is one where the conclusion must be true if all the "
+            "premises are true. A sound argument is valid and also has premises that "
+            "are actually true.\n\n"
+            "- Every sound argument is valid.\n"
+            "- A valid argument need not be sound if one or more premises are false.\n\n"
+            "Example: “All mammals are fish; all whales are mammals; therefore all "
+            "whales are fish” has a valid form, but it is not sound because its first "
+            "premise is false."
+        )
     left_note = notes.get(left) or ""
     right_note = notes.get(right) or ""
     left_used = set()
@@ -74,13 +86,16 @@ def _comparison(lowered, text, notes):
     left_name = _star(left)
     right_name = _star(right)
     return (
-        f"{left_name} and {right_name}\n"
-        f"- {left_name}: {left_line}\n"
-        f"- {right_name}: {right_line}\n"
-        f"Advantages: {left_name}{_body(left_adv, left)} "
-        f"{_link_word(left, right, 'advantage')} {right_name}{_body(right_adv, right)}\n"
-        f"Limitations: {left_name}{_body(left_limit, left)} "
-        f"{_link_word(left, right, 'limit')} {right_name}{_body(right_limit, right)}"
+        f"{left_name} and {right_name}\n\n"
+        f"- What they are:\n"
+        f"  - {left_name}: {left_line}\n"
+        f"  - {right_name}: {right_line}\n\n"
+        f"- Advantages:\n"
+        f"  - {left_name}:{_body(left_adv, left)}\n"
+        f"  - {right_name}:{_body(right_adv, right)}\n\n"
+        f"- Limitations:\n"
+        f"  - {left_name}:{_body(left_limit, left)}\n"
+        f"  - {right_name}:{_body(right_limit, right)}"
     )
 
 
@@ -162,13 +177,11 @@ def _case_study(lowered, text, notes):
 def _proof(lowered, text, notes):
     if not re.search(r"\b(prove|proof|show that)\b", lowered):
         return None
-    if re.search(r"\b(even|contrapositive|induction|contradiction|subset|if and only if)\b", lowered):
-        return None
     return (
-        "Given. Write the hypotheses in symbols before the prose.\n\n"
-        "Goal. Write the claim as an implication, a subset, or a quantified statement.\n\n"
-        "Proof. Each line is given, a definition, or a consequence of earlier lines. "
-        "The last line is the goal, and it names the definition it used."
+        "I don't have a checked local derivation for this exact claim, so I won't "
+        "present a generic proof outline as if it proved the result. Share the "
+        "domain, definitions, and allowed assumptions, and I can work through "
+        "the claim step by step."
     )
 
 
@@ -253,7 +266,11 @@ def _meaning(note):
 
 def _with_sources(reply, notes, excerpts):
     blocks = [reply]
-    sourced = [f"{name}: {note}" for name, note in notes.items() if note]
+    sourced = [
+        f"- {name}: {note.replace(chr(10), chr(10) + '  ')}"
+        for name, note in notes.items()
+        if note
+    ]
     if sourced or excerpts:
         blocks.append("")
         blocks.append("Sources used for this comparison:")
@@ -314,12 +331,18 @@ def _mark_example(sentence):
     )
 
 
+def _comparison_name(term):
+    term = term.strip(" \t?.!\"'“”‘’")
+    return re.sub(r"^(?:a|an|the)\s+", "", term)
+
+
 def _pair(lowered):
     patterns = (
         r"why (?:is|are) (.+?) better than (.+)",
         r"why (?:is|are) (.+?) worse than (.+)",
         r"(.+?) better than (.+)",
-        r"(?:compare|comparison of|difference between) (.+?) (?:and|vs\.?|versus|with) (.+)",
+        r"(?:what(?:'s| is)\s+)?(?:the\s+)?(?:compare|comparison of|comparison between|"
+        r"difference between|difference of) (.+?) (?:and|vs\.?|versus|with) (.+)",
         r"(.+?) (?:vs\.?|versus) (.+)",
     )
     for pattern in patterns:
