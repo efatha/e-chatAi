@@ -98,6 +98,18 @@ class ReasoningScorecardTests(unittest.TestCase):
     def test_programming_cases_do_not_receive_a_parity_template(self):
         self.assertIsNone(self.agent.answer("Explain cases in Python programming."))
 
+    def test_code_requests_return_a_sample_before_books(self):
+        with patch.object(router, "_independent_agent", None), patch.object(router, "_book_agent", self.agent):
+            python = router.answer_question("state a python code", username="John")
+            java = router.answer_question("write java code", username="John")
+            clang = router.answer_question("show me c code", username="John")
+            html = router.answer_question("create html", username="John")
+        self.assertIn("```python", python["response"])
+        self.assertIn("```java", java["response"])
+        self.assertIn("```c", clang["response"])
+        self.assertIn("```html", html["response"])
+        self.assertNotIn("closest matching evidence", python["response"])
+
     def test_spoken_arithmetic_runs_before_books(self):
         with patch.object(router, "_independent_agent", None), patch.object(router, "_book_agent", self.agent):
             added = router.answer_question(

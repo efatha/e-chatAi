@@ -313,12 +313,19 @@ def arithmetic_reply(message, username=None):
     return None
 
 
-def _code_reply(text):
+def code_reply(text, username=None):
     """A short fenced sample when the user asks for code, so the chat can color it."""
+    del username
     lowered = (text or "").lower()
-    if not re.search(r"\b(write|create|make|generate|draft|show)\b", lowered):
-        return None
-    if not re.search(r"\b(code|html|python|java|css|javascript)\b", lowered):
+    asks = re.search(
+        r"\b(write|create|make|generate|draft|show|state|give|code|program|script|snippet)\b",
+        lowered,
+    )
+    language_named = re.search(
+        r"\b(html|css|javascript|java|python|c\+\+|c)\b",
+        lowered,
+    )
+    if not asks or not language_named:
         return None
     if re.search(r"\bhtml\b", lowered):
         language, body = "html", (
@@ -343,6 +350,14 @@ def _code_reply(text):
             "}"
         )
         intro = "Here is a small Java program."
+    elif re.search(r"\bjavascript\b", lowered):
+        language, body = "javascript", (
+            "function greet(name) {\n"
+            "  return `Hello, ${name}`;\n"
+            "}\n"
+            "console.log(greet(\"e-Chat\"));"
+        )
+        intro = "Here is a small JavaScript function."
     elif re.search(r"\bcss\b", lowered):
         language, body = "css", (
             "body {\n"
@@ -351,6 +366,24 @@ def _code_reply(text):
             "}"
         )
         intro = "Here is a small CSS rule."
+    elif re.search(r"\bc\+\+\b", lowered):
+        language, body = "cpp", (
+            "#include <iostream>\n"
+            "int main() {\n"
+            "    std::cout << \"Hello\\n\";\n"
+            "    return 0;\n"
+            "}"
+        )
+        intro = "Here is a small C++ program."
+    elif re.search(r"\bc\b", lowered):
+        language, body = "c", (
+            "#include <stdio.h>\n"
+            "int main(void) {\n"
+            "    printf(\"Hello\\n\");\n"
+            "    return 0;\n"
+            "}"
+        )
+        intro = "Here is a small C program."
     else:
         language, body = "python", (
             "def greet(name):\n"
@@ -513,7 +546,7 @@ class IndependentAgent:
         text = message or ""
         lowered = text.lower()
 
-        coded = _code_reply(text)
+        coded = code_reply(text)
         if coded:
             return _personalize(coded, username)
 
