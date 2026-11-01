@@ -235,6 +235,11 @@ def answer_question(message, username=None, history=None, file=None, conversatio
             )
             return {"response": fallback, "source": "independent", "provider": "local"}
 
+    if text and not has_file:
+        known = _local_knowledge(text, independent, username)
+        if known:
+            return known
+
     if text and not has_file and detect_lookup(text):
         defined = _definition_from_local_or_wikipedia(text, independent, username)
         if defined:
@@ -299,6 +304,27 @@ def answer_question(message, username=None, history=None, file=None, conversatio
         )
     fallback = _with_name(fallback, username)
     return {"response": fallback, "source": "independent", "provider": "local"}
+
+
+def _local_knowledge(text, independent, username):
+    """Prefer a saved fact, such as who Efatha is, over a web definition."""
+    knowledge = getattr(independent, "trained_knowledge", None) or []
+    lowered = (text or "").lower()
+    best = None
+    best_length = 0
+    for item in knowledge:
+        for keyword in item.get("keywords") or []:
+            word = str(keyword).lower()
+            if word and word in lowered and len(word) > best_length:
+                best = item.get("response")
+                best_length = len(word)
+    if not best:
+        return None
+    return {
+        "response": _with_name(best, username),
+        "source": "knowledge",
+        "provider": "data.json",
+    }
 
 
 def _yes_no_reply(text, history, conversation, username):

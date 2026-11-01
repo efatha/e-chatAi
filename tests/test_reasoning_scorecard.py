@@ -98,6 +98,24 @@ class ReasoningScorecardTests(unittest.TestCase):
     def test_programming_cases_do_not_receive_a_parity_template(self):
         self.assertIsNone(self.agent.answer("Explain cases in Python programming."))
 
+    def test_efatha_questions_use_saved_facts(self):
+        independent = SimpleNamespace(trained_knowledge=[
+            {
+                "keywords": ["who is efatha rutakaza", "efatha rutakaza"],
+                "response": "Efatha Rutakaza is a software engineer and web developer.",
+            },
+            {
+                "keywords": ["efatha"],
+                "response": "Efatha Rutakaza created e-Chat.",
+            },
+        ])
+        with patch.object(router, "_independent_agent", independent), patch.object(router, "_book_agent", self.agent):
+            short = router.answer_question("who is efatha?", username="John")
+            full = router.answer_question("who is efatha rutakaza?", username="John")
+        self.assertIn("created e-Chat", short["response"])
+        self.assertIn("software engineer", full["response"])
+        self.assertNotIn("Wikipedia definition", short["response"])
+
     def test_yes_and_no_follow_the_previous_reply(self):
         with patch.object(router, "_independent_agent", None), patch.object(router, "_book_agent", self.agent):
             confirmed = router.answer_question(
