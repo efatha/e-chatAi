@@ -250,7 +250,8 @@ class BookAgent:
                     score *= 0.1
                 if best is None or score > best[0]:
                     best = (score, chunk["text"], chunk["page"])
-            if best and best[0] >= 4:
+            minimum_score = 4 if concept_groups else 10
+            if best and best[0] >= minimum_score:
                 ranked.append((
                     best[0],
                     book["title"],
@@ -777,7 +778,11 @@ def _proof_habit(text):
             "Even(n) ↔ Even(n²): if n = 2k then n² = 4k², so n² is even. "
             "If n is odd then n² is odd, so the other direction is the contrapositive of 'odd squares stay odd'."
         )
-    if "contradiction" in lowered or "irrational" in lowered or "square root of 2" in lowered or "sqrt(2)" in lowered or "√2" in text:
+    sqrt_two = bool(re.search(
+        r"(?:square root of 2|sqrt\s*\(\s*2\s*\)|√\s*2|\broot 2\b)",
+        lowered,
+    )) or "√2" in text
+    if sqrt_two:
         return (
             "To prove R, assume ¬R and reach S ∧ ¬S.\n"
             "Assume √2 = a/b for coprime positive integers a and b. Then a² = 2b² is even, "
@@ -785,7 +790,7 @@ def _proof_habit(text):
             "b² = 2k², so b is even for the same reason. Now a and b share the factor 2, "
             "contradicting that they are coprime. ∴ √2 is irrational."
         )
-    if "cases" in lowered:
+    if re.search(r"proof by cases|case analysis|exhaustive cases", lowered):
         return (
             "A proof by cases splits the hypothesis into an exhaustive list.\n"
             "Given P ∨ Q, and both P → R and Q → R, conclude R.\n"

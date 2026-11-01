@@ -92,6 +92,23 @@ class ReasoningScorecardTests(unittest.TestCase):
         self.assertIn("claim is false", answer)
         self.assertIn("3 × 5 = 15", answer)
 
+    def test_other_irrational_numbers_do_not_receive_the_sqrt_two_proof(self):
+        self.assertIsNone(self.agent.answer("Prove that pi is irrational."))
+
+    def test_programming_cases_do_not_receive_a_parity_template(self):
+        self.assertIsNone(self.agent.answer("Explain cases in Python programming."))
+
+    def test_unrelated_real_world_question_does_not_use_weak_book_evidence(self):
+        with (
+            patch.object(router, "_independent_agent", None),
+            patch.object(router, "_book_agent", self.agent),
+        ):
+            result = router.answer_question(
+                "Why did sales decline in our Kampala shop last month?"
+            )
+        self.assertNotIn("From the books", result["response"])
+        self.assertNotIn("closest matching evidence", result["response"])
+
     def test_unknown_theorem_does_not_get_a_fake_proof_template(self):
         with (
             patch.object(router, "_independent_agent", None),
