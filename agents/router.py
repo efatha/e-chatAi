@@ -31,7 +31,8 @@ def book_agent():
 
 
 _AFFIRM = re.compile(
-    r"^(?:yes|yeah|yep|sure|absolutely|ok|okay|of course)(?:\s+please)?[.!]*$",
+    r"^(?:yes|yeah|yep|sure|absolutely|ok|okay|of course|good|fine|amazing)"
+    r"(?:\s+please)?[.!]*$",
     re.IGNORECASE,
 )
 _DECLINE = re.compile(

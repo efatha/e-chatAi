@@ -373,9 +373,10 @@ body{
   border-radius: 12px 12px 12px 2px;
 }
 .chat-body .message .message-text.backend-error{
-  color: var(--efa-gray-900);
-  background: linear-gradient(45deg, pink, #ffd6e7);
-  border: 1px solid rgba(201, 72, 127, 0.32);
+  color: pink;
+  background: inherit;
+  background-color: var(--efa-sea);
+  border: 1px solid pink;
 }
 .chat-body .message .message-text strong { font-weight: 700; }
 .chat-body .message .message-text em { font-style: italic; }

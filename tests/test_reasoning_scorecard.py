@@ -122,6 +122,15 @@ class ReasoningScorecardTests(unittest.TestCase):
         self.assertIn("I'll keep calling you John", confirmed["response"])
         self.assertNotIn("tell me about your name", confirmed["response"])
         self.assertIn("I won’t guess", declined["response"])
+        noted = router.answer_question(
+            "good",
+            username="John",
+            conversation=[
+                {"role": "assistant", "content": "😄 Great, I’ve got it — your favorite actor is Jackie Chan. I’ll remember that."},
+                {"role": "user", "content": "good"},
+            ],
+        )
+        self.assertIn("Understood — yes", noted["response"])
         self.assertNotIn("couldn’t find enough support", declined["response"])
 
     def test_greeting_and_name_use_the_saved_user(self):
