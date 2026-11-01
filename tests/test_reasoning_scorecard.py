@@ -98,6 +98,69 @@ class ReasoningScorecardTests(unittest.TestCase):
     def test_programming_cases_do_not_receive_a_parity_template(self):
         self.assertIsNone(self.agent.answer("Explain cases in Python programming."))
 
+    def test_plain_definitions_do_not_fall_through_to_books(self):
+        with (
+            patch.object(router, "_independent_agent", None),
+            patch.object(router, "_book_agent", self.agent),
+            patch.object(router, "wikipedia_definition", return_value=None),
+        ):
+            result = router.answer_question("what is smart?", username="John")
+        self.assertNotIn("closest matching evidence", result["response"])
+        self.assertIn("Wikipedia", result["response"])
+
+    def test_definition_questions_go_directly_to_wikipedia(self):
+        independent = SimpleNamespace(word_meanings={"python": "Python is a programming language."})
+        with (
+            patch.object(router, "_independent_agent", independent),
+            patch.object(router, "_book_agent", self.agent),
+            patch.object(
+                router,
+                "wikipedia_definition",
+                return_value="Wikipedia — Artificial intelligence\nAI is the study of intelligent machines.",
+            ) as wiki,
+        ):
+            result = router.answer_question("what is ai?", username="John")
+        wiki.assert_called_once_with("ai", "what is ai?")
+        self.assertEqual(result["provider"], "wikipedia")
+        self.assertIn("Artificial intelligence", result["response"])
+        self.assertNotIn("programming language", result["response"])
+        self.assertNotIn("won’t invent", result["response"])
+
+    def test_reflective_questions_use_wikipedia_before_books(self):
+        with (
+            patch.object(router, "_independent_agent", None),
+            patch.object(router, "_book_agent", self.agent),
+            patch.object(
+                router,
+                "search_result_text",
+                return_value="Search result:\nGravity. Gravity is a force.",
+            ) as search,
+        ):
+            result = router.answer_question(
+                "Suppose that gravity stopped for one minute.",
+                username="John",
+            )
+        search.assert_called_once()
+        self.assertEqual(result["provider"], "wikipedia")
+        self.assertIn("Gravity", result["response"])
+        self.assertNotIn("closest matching evidence", result["response"])
+
+    def test_greeting_and_daily_plans_are_conversation_not_book_excerpts(self):
+        with (
+            patch.object(router, "_independent_agent", None),
+            patch.object(router, "_book_agent", self.agent),
+        ):
+            hello = router.answer_question("hello", username="John")
+            plans = router.answer_question(
+                "what have you planned today?", username="John"
+            )
+        self.assertIn("Hello John", hello["response"])
+        self.assertNotIn("closest matching evidence", hello["response"])
+        self.assertIn("personal schedule", plans["response"])
+        self.assertNotIn("closest matching evidence", plans["response"])
+        self.assertIsNone(self.agent.answer("hello"))
+        self.assertIsNone(self.agent.answer("what have you planned today?"))
+
     def test_unrelated_real_world_question_does_not_use_weak_book_evidence(self):
         with (
             patch.object(router, "_independent_agent", None),

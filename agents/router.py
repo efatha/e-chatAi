@@ -4,7 +4,13 @@ import re
 
 from agents.independent_agent import IndependentAgent, uncertain_subject
 from agents.book_agent import BookAgent
-from agents.knowledge_agent import wikipedia_summary
+from agents.knowledge_agent import (
+    detect_lookup,
+    looks_like_open_question,
+    search_result_text,
+    wikipedia_definition,
+    wikipedia_summary,
+)
 from agents.reasoning_patterns import concept_terms, pattern_answer
 
 _independent_agent = None
@@ -49,6 +55,17 @@ _PERSONAL_FACT = re.compile(
 )
 _PERSONAL_QUESTION = re.compile(
     r"^(who|what|how|where|when|why)(?:'s|\s+is)\s+my\s+(.{1,60}?)[?!.]*$",
+    re.IGNORECASE,
+)
+_GREETING = re.compile(
+    r"^(?:hi|hello|hey|good\s+(?:morning|afternoon|evening))(?:\s+there)?[!.,]*$",
+    re.IGNORECASE,
+)
+_PLANS = re.compile(
+    r"^(?:what(?:'s|\s+is|\s+have|\s+are)?\s+)?"
+    r"(?:you\s+)?(?:have\s+)?"
+    r"(?:got\s+)?"
+    r"(?:planned|planning|doing)\b.*$",
     re.IGNORECASE,
 )
 
@@ -160,6 +177,28 @@ def answer_question(message, username=None, history=None, file=None, conversatio
                 "source": "memory",
                 "provider": "local-sqlite",
             }
+        if _GREETING.match(text):
+            greeting = (
+                f"Hello {username}! How can I help you today?"
+                if username
+                else "Hello! How can I help you today?"
+            )
+            return {
+                "response": greeting,
+                "source": "conversation",
+                "provider": "local",
+            }
+        if _PLANS.match(text):
+            return {
+                "response": _with_name(
+                    "I don’t keep a personal schedule. I’m here for whatever "
+                    "you want to work on — a question, a proof, or something "
+                    "from the local books.",
+                    username,
+                ),
+                "source": "conversation",
+                "provider": "local",
+            }
         personal_question = _PERSONAL_QUESTION.match(text)
         if personal_question:
             question_word = personal_question.group(1).lower()
@@ -197,6 +236,29 @@ def answer_question(message, username=None, history=None, file=None, conversatio
                 username,
             )
             return {"response": fallback, "source": "independent", "provider": "local"}
+
+    if text and not has_file and detect_lookup(text):
+        defined = _definition_from_local_or_wikipedia(text, independent, username)
+        if defined:
+            return defined
+        return {
+            "response": _with_name(
+                "I couldn’t retrieve a Wikipedia definition for that. "
+                "I won’t answer a definition from an unrelated book passage.",
+                username,
+            ),
+            "source": "knowledge",
+            "provider": "wikipedia",
+        }
+
+    if text and not has_file and looks_like_open_question(text):
+        reflected = search_result_text(text)
+        if reflected:
+            return {
+                "response": _with_name(reflected, username),
+                "source": "knowledge",
+                "provider": "wikipedia",
+            }
 
     if text and not has_file:
         from_books = book_agent().answer(text)
@@ -239,6 +301,22 @@ def answer_question(message, username=None, history=None, file=None, conversatio
         )
     fallback = _with_name(fallback, username)
     return {"response": fallback, "source": "independent", "provider": "local"}
+
+
+def _definition_from_local_or_wikipedia(text, independent, username):
+    """Definition questions go straight to Wikipedia."""
+    del independent
+    found = detect_lookup(text)
+    if not found:
+        return None
+    external = wikipedia_definition(found["term"], text)
+    if not external:
+        return None
+    return {
+        "response": _with_name(external, username),
+        "source": "knowledge",
+        "provider": "wikipedia",
+    }
 
 
 def _with_name(text, username):

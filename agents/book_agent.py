@@ -173,6 +173,8 @@ class BookAgent:
         if not text:
             return None
 
+        if _casual_talk(text):
+            return None
         passages = self._from_each_book(text)
         habit = _proof_habit(text)
         if habit:
@@ -201,6 +203,10 @@ class BookAgent:
         ):
             return []
         query = _tokens(message)
+        important = {
+            token for token in query
+            if len(token) >= 5 or token in FOCUS
+        }
         concept = _semantic_concept(message)
         concept_key, concept_groups = concept if concept else (None, ())
         expanded_query = set(query)
@@ -209,7 +215,7 @@ class BookAgent:
                 expanded_query.update(_tokens(phrase))
         if "statistic" in (message or "").lower():
             expanded_query.update({"probability", "statistics"})
-        if not expanded_query or not self.books:
+        if (not concept_groups and not important) or not self.books:
             return []
         ranked = []
         for book in self.books:
@@ -231,6 +237,8 @@ class BookAgent:
                     )
                     if concept_hits < 2:
                         continue
+                elif important and not (important & chunk_tokens):
+                    continue
                 elif query and len(query & chunk_tokens) < min(2, len(query)):
                     continue
                 direct_hits = len(query & chunk_tokens)
@@ -321,6 +329,24 @@ def _split_page(raw):
     if current:
         chunks.append(current)
     return chunks
+
+
+def _casual_talk(text):
+    """Greetings and small talk are not book questions."""
+    lowered = (text or "").strip()
+    if re.fullmatch(
+        r"(?:hi|hello|hey|good\s+(?:morning|afternoon|evening))(?:\s+there)?[!.,]*",
+        lowered,
+        re.IGNORECASE,
+    ):
+        return True
+    return bool(re.fullmatch(
+        r"(?:what(?:'s|\s+is|\s+have|\s+are)?\s+)?"
+        r"(?:you\s+)?(?:have\s+)?(?:got\s+)?"
+        r"(?:planned|planning|doing)\b.*",
+        lowered,
+        re.IGNORECASE,
+    ))
 
 
 def _tokens(text):

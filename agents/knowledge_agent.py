@@ -124,6 +124,131 @@ def dictionary_entry(term):
         return None
 
 
+def wikipedia_definition(term, question=""):
+    """Wikipedia article text only, with no dictionary-site detour."""
+    subject = (term or "").strip()
+    if not subject:
+        return None
+    if subject.lower() in {"ai", "a.i.", "a.i"}:
+        subject = "Artificial intelligence"
+    direct = _resolved_summary(subject)
+    if direct:
+        return direct
+    head = re.sub(
+        r"\s+in\s+(?:math|mathematics|statistics|science|programming)\b.*$",
+        "",
+        subject,
+        flags=re.IGNORECASE,
+    ).strip()
+    if head and head.lower() != subject.lower():
+        return _resolved_summary(head)
+    return None
+
+
+def _resolved_summary(subject):
+    summary = _wikipedia_plain_summary(subject)
+    if summary and not _is_disambiguation(summary):
+        return summary
+    if not summary:
+        return None
+    for title in (_referred_title(summary), _sense_title(summary), _search_title(subject)):
+        if not title or title.lower() == subject.lower():
+            continue
+        better = _wikipedia_plain_summary(title)
+        if better and not _is_disambiguation(better):
+            return better
+    title = _disambiguation_target(subject)
+    if title and title.lower() != subject.lower():
+        better = _wikipedia_plain_summary(title)
+        if better and not _is_disambiguation(better):
+            return better
+    return None
+
+
+def _is_disambiguation(summary):
+    head = (summary or "").lower()
+    return "may refer to" in head or "may also refer to" in head
+
+
+def _sense_title(summary):
+    """First real topic named by a disambiguation intro."""
+    match = re.search(
+        r"may (?:also )?refer to (?:a |an |the )?(.+)",
+        summary or "",
+        re.IGNORECASE,
+    )
+    if not match:
+        return None
+    phrase = re.split(r"\bor\b|,", match.group(1))[0]
+    phrase = re.sub(r"^(?:a|an|the)\s+", "", phrase.strip(" ."))
+    words = phrase.split()
+    if words and words[-1].lower() in {"intelligence", "selfishness"}:
+        return words[-1]
+    return phrase or None
+
+
+def _search_title(term):
+    try:
+        response = requests.get(
+            "https://en.wikipedia.org/w/api.php",
+            params={
+                "action": "query",
+                "list": "search",
+                "srsearch": term,
+                "srlimit": 5,
+                "format": "json",
+            },
+            headers={"User-Agent": WIKI_USER_AGENT},
+            timeout=8,
+        )
+        response.raise_for_status()
+        hits = (response.json().get("query") or {}).get("search") or []
+    except (requests.RequestException, ValueError):
+        return None
+    for hit in hits:
+        title = hit.get("title") or ""
+        if title and "disambiguation" not in title.lower() and title.lower() != term.lower():
+            return title
+    return None
+
+
+def _referred_title(summary):
+    match = re.search(
+        r"commonly refers to ([^,\n.]+)",
+        summary or "",
+        re.IGNORECASE,
+    )
+    if not match:
+        return None
+    return match.group(1).strip()
+
+
+def _wikipedia_plain_summary(title):
+    """Article intro through the public Wikipedia API. Needs only requests."""
+    try:
+        response = requests.get(
+            "https://en.wikipedia.org/api/rest_v1/page/summary/"
+            + requests.utils.quote(title.replace(" ", "_")),
+            headers={"User-Agent": WIKI_USER_AGENT, "Accept": "application/json"},
+            timeout=8,
+        )
+        if response.status_code == 404:
+            return None
+        response.raise_for_status()
+        payload = response.json() or {}
+    except (requests.RequestException, ValueError) as exc:
+        logger.warning("Wikipedia summary failed: %s", type(exc).__name__)
+        return None
+    if payload.get("type") == "disambiguation":
+        extract = (payload.get("extract") or "").strip()
+        return extract or None
+    extract = re.sub(r"\s+", " ", payload.get("extract") or "").strip()
+    page_title = payload.get("title") or title
+    if len(extract) < 40:
+        return None
+    return f"Wikipedia — {page_title}\n{_trim(extract, 700)}"
+
+
 def word_reference(word):
     """A definition plus a Wikipedia article, skipping a bare disambiguation page."""
     term = (word or "").strip().lower()
@@ -412,6 +537,9 @@ def looks_like_open_question(text):
         "suppose ",
         "what would you",
         "in your opinion",
+        "think that",
+        "think you",
+        "what if ",
     )
     return any(mark in lowered for mark in marks)
 
@@ -422,14 +550,15 @@ def search_result_text(question):
     if not query:
         return None
     wanted = _question_words(query)
-    found = _duckduckgo_snippets(query)
-    lines = _matching(found, wanted) or found[:2]
+    content = [
+        word for word in wanted
+        if word not in _NUMBER_WORDS and not word.isdigit()
+    ]
+    wiki_lines = _wikipedia_snippet(query)
+    lines = _matching(wiki_lines, content, minimum=2) or wiki_lines[:1]
     if not lines:
-        content = [
-            word for word in wanted
-            if word not in _NUMBER_WORDS and not word.isdigit()
-        ]
-        lines = _matching(_wikipedia_snippet(query), content, minimum=2)
+        found = _duckduckgo_snippets(query)
+        lines = _matching(found, wanted) or found[:2]
     if not lines:
         return None
     return "Search result:\n" + "\n".join(lines[:2])
