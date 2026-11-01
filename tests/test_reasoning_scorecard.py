@@ -98,6 +98,25 @@ class ReasoningScorecardTests(unittest.TestCase):
     def test_programming_cases_do_not_receive_a_parity_template(self):
         self.assertIsNone(self.agent.answer("Explain cases in Python programming."))
 
+    def test_spoken_arithmetic_runs_before_books(self):
+        with patch.object(router, "_independent_agent", None), patch.object(router, "_book_agent", self.agent):
+            added = router.answer_question(
+                "if a number is added by 8 and becomes 9 what is that number?",
+                username="John",
+            )
+            multiplied = router.answer_question(
+                "if a number is multiplied by 7 and becomes 9 what is that number?",
+                username="John",
+            )
+            expression = router.answer_question("8-9*/3", username="John")
+        self.assertIn("n = 9 - 8", added["response"])
+        self.assertIn("= 1", added["response"])
+        self.assertNotIn("closest matching evidence", added["response"])
+        self.assertIn("9/7", multiplied["response"])
+        self.assertNotIn("closest matching evidence", multiplied["response"])
+        self.assertIn("couldn't evaluate that math", expression["response"])
+        self.assertNotIn("couldn’t find enough support", expression["response"])
+
     def test_efatha_questions_use_saved_facts(self):
         independent = SimpleNamespace(trained_knowledge=[
             {

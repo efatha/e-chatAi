@@ -258,6 +258,61 @@ def _evaluate_expression(expr):
     return eval_node(parsed.body)
 
 
+def arithmetic_reply(message, username=None):
+    """Solve a spoken or written arithmetic question, including an unknown number."""
+    text = message or ""
+    lowered = text.lower()
+    proof_question = bool(re.search(
+        r"\b(prove|proof|induction|contrapositive|contradiction|subset|quantif)\b",
+        lowered,
+    ))
+    if proof_question:
+        return None
+
+    spoken_expr, reading = _spoken_arithmetic(text)
+    if spoken_expr:
+        try:
+            result = _evaluate_expression(spoken_expr)
+            if re.fullmatch(r"[0-9+\-*/().]+", reading or ""):
+                reply = _explain_arithmetic(spoken_expr, result)
+            else:
+                reply = (
+                    f"I read that as {reading}. "
+                    f"{spoken_expr} = {_show_number(result)}."
+                )
+            return _personalize(reply, username)
+        except Exception:
+            pass
+
+    looks_like_expression = bool(re.fullmatch(
+        r"[\d+\-*/().\s^%]+",
+        text.strip(),
+    )) and bool(re.search(r"\d", text))
+    if _contains_math_operation(text):
+        try:
+            result = _evaluate_expression(text)
+            return _personalize(f"the result is {result}", username)
+        except Exception:
+            if looks_like_expression:
+                return _personalize(
+                    "I couldn't evaluate that math. Try with digits and operators only.",
+                    username,
+                )
+
+    if _contains_math_keywords(text):
+        try:
+            math_expr = _parse_natural_language_math(text)
+            if math_expr:
+                result = _evaluate_expression(math_expr)
+                return _personalize(f"the result is {result}", username)
+        except Exception:
+            return _personalize(
+                "I couldn't evaluate that math. Try with digits and operators only.",
+                username,
+            )
+    return None
+
+
 def _code_reply(text):
     """A short fenced sample when the user asks for code, so the chat can color it."""
     lowered = (text or "").lower()
@@ -462,44 +517,9 @@ class IndependentAgent:
         if coded:
             return _personalize(coded, username)
 
-        proof_question = bool(re.search(
-            r"\b(prove|proof|induction|contrapositive|contradiction|subset|quantif)\b",
-            lowered,
-        ))
-
-        spoken_expr, reading = (None, None) if proof_question else _spoken_arithmetic(text)
-        if spoken_expr:
-            try:
-                result = _evaluate_expression(spoken_expr)
-                if re.fullmatch(r"[0-9+\-*/().]+", reading or ""):
-                    reply = _explain_arithmetic(spoken_expr, result)
-                else:
-                    reply = (
-                        f"I read that as {reading}. "
-                        f"{spoken_expr} = {_show_number(result)}."
-                    )
-                return _personalize(reply, username)
-            except Exception:
-                pass
-
-        if _contains_math_operation(text) and not proof_question:
-            try:
-                result = _evaluate_expression(text)
-                return _personalize(f"the result is {result}", username)
-            except Exception:
-                pass
-
-        if _contains_math_keywords(text) and not proof_question:
-            try:
-                math_expr = _parse_natural_language_math(text)
-                if math_expr:
-                    result = _evaluate_expression(math_expr)
-                    return _personalize(f"the result is {result}", username)
-            except Exception:
-                return _personalize(
-                    "I couldn't evaluate that math. Try with digits and operators only.",
-                    username,
-                )
+        solved = arithmetic_reply(text, username)
+        if solved:
+            return solved
 
         if re.search(r"\b(hi|hello|hey)\b", lowered):
             if username:

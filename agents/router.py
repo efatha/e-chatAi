@@ -2,7 +2,7 @@
 
 import re
 
-from agents.independent_agent import IndependentAgent, uncertain_subject
+from agents.independent_agent import IndependentAgent, arithmetic_reply, uncertain_subject
 from agents.book_agent import BookAgent
 from agents.knowledge_agent import (
     detect_lookup,
@@ -234,6 +234,15 @@ def answer_question(message, username=None, history=None, file=None, conversatio
                 username,
             )
             return {"response": fallback, "source": "independent", "provider": "local"}
+
+    if text and not has_file:
+        solved = arithmetic_reply(text, username)
+        if solved:
+            return {
+                "response": solved,
+                "source": "reasoning",
+                "provider": "local-rules",
+            }
 
     if text and not has_file:
         known = _local_knowledge(text, independent, username)
