@@ -98,6 +98,42 @@ class ReasoningScorecardTests(unittest.TestCase):
     def test_programming_cases_do_not_receive_a_parity_template(self):
         self.assertIsNone(self.agent.answer("Explain cases in Python programming."))
 
+    def test_yes_and_no_follow_the_previous_reply(self):
+        with patch.object(router, "_independent_agent", None), patch.object(router, "_book_agent", self.agent):
+            confirmed = router.answer_question(
+                "yeah",
+                username="John",
+                history=["what is my name?"],
+                conversation=[
+                    {"role": "user", "content": "what is my name?"},
+                    {"role": "assistant", "content": "😊 Your name is John, right?"},
+                    {"role": "user", "content": "yeah"},
+                ],
+            )
+            declined = router.answer_question(
+                "no",
+                username="John",
+                history=["what is my name?", "yeah"],
+                conversation=[
+                    {"role": "assistant", "content": "Okay — tell me about your name."},
+                    {"role": "user", "content": "no"},
+                ],
+            )
+        self.assertIn("I'll keep calling you John", confirmed["response"])
+        self.assertNotIn("tell me about your name", confirmed["response"])
+        self.assertIn("I won’t guess", declined["response"])
+        self.assertNotIn("couldn’t find enough support", declined["response"])
+
+    def test_greeting_and_name_use_the_saved_user(self):
+        with patch.object(router, "_independent_agent", None), patch.object(router, "_book_agent", self.agent):
+            hello = router.answer_question("hello", username="John")
+            name = router.answer_question("what is my name?", username="John")
+            who = router.answer_question("who am I?", username="John")
+        self.assertIn("👋😄 Hello John!", hello["response"])
+        self.assertIn("😊 Your name is John, right?", name["response"])
+        self.assertIn("😊 Your name is John, right?", who["response"])
+        self.assertNotIn("closest matching evidence", name["response"])
+
     def test_plain_definitions_do_not_fall_through_to_books(self):
         with (
             patch.object(router, "_independent_agent", None),

@@ -373,11 +373,13 @@ const wireCopyButtons = (root, blocks) => {
 const generateEchatResponse = async (incomingMsgDiv, conversationId, sentMessage) => {
   const msgElement = incomingMsgDiv.querySelector(".message-text");
   const thread = readThreads().find((item) => item.id === conversationId);
+  const pageName = new URLSearchParams(window.location.search).get("name");
   const payload = {
     message: sentMessage || "",
     conversation_id: conversationId,
     memory: ((thread && thread.messages) || []).slice(-40)
   };
+  if (pageName) payload.username = pageName;
   if (userData.file.data) payload.file = userData.file;
   userData.file = { data: null, mime_type: null };
 

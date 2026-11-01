@@ -115,9 +115,11 @@ def _chat_turn():
             "provider": "local-sqlite",
         }
     else:
+        raw_name = session.get("username") or data.get("username") or ""
+        username = re.sub(r"\s+", " ", str(raw_name)).strip()[:80] or None
         result = answer_question(
             message=message,
-            username=session.get("username"),
+            username=username,
             history=history,
             file=file,
             conversation=conversation,

@@ -61,6 +61,10 @@ _GREETING = re.compile(
     r"^(?:hi|hello|hey|good\s+(?:morning|afternoon|evening))(?:\s+there)?[!.,]*$",
     re.IGNORECASE,
 )
+_NAME_QUESTION = re.compile(
+    r"^(?:what(?:'s|\s+is)\s+my\s+name|who(?:'s|\s+is)\s+my\s+name|who\s+am\s+i)[?.!]*$",
+    re.IGNORECASE,
+)
 _PLANS = re.compile(
     r"^(?:what(?:'s|\s+is|\s+have|\s+are)?\s+)?"
     r"(?:you\s+)?(?:have\s+)?"
@@ -82,6 +86,18 @@ def _pending_personal_question(text, history):
         return None
     previous = _previous_message(history, text)
     return _PERSONAL_QUESTION.match(previous)
+
+
+def _last_assistant(conversation):
+    for item in reversed(conversation or []):
+        if isinstance(item, dict) and item.get("role") == "assistant":
+            return str(item.get("content") or "").strip()
+    return ""
+
+
+_NAME_CONFIRM = re.compile(r"your name is\s+(.+?),\s+right\?", re.IGNORECASE)
+_REMEMBER_OFFER = re.compile(r"would you like to tell me so i can remember", re.IGNORECASE)
+_TELL_ME = re.compile(r"tell me about your\s+(.+?)\.", re.IGNORECASE)
 
 
 def _accepted_definition(text, history, independent):
@@ -113,28 +129,10 @@ def answer_question(message, username=None, history=None, file=None, conversatio
     research_match = _RESEARCH.match(text) if text and not has_file else None
 
     if text and not has_file:
-        pending_personal = _pending_personal_question(text, history)
-        if pending_personal:
-            subject = pending_personal.group(2).strip()
-            if _AFFIRM.match(text):
-                return {
-                    "response": _with_name(
-                        f"Okay — tell me about your {subject}. "
-                        f"You can say, “My {subject} is …,” and I’ll remember it.",
-                        username,
-                    ),
-                    "source": "conversation",
-                    "provider": "local",
-                }
-            return {
-                "response": _with_name(
-                    f"That’s okay — I won’t guess. We can leave your {subject} "
-                    "unknown until you choose to share it.",
-                    username,
-                ),
-                "source": "conversation",
-                "provider": "local",
-            }
+        if _AFFIRM.match(text) or _DECLINE.match(text):
+            reply = _yes_no_reply(text, history, conversation, username)
+            if reply:
+                return reply
 
         accepted = _accepted_definition(text, history, independent)
         if accepted:
@@ -142,15 +140,6 @@ def answer_question(message, username=None, history=None, file=None, conversatio
                 "response": _with_name(accepted, username),
                 "source": "knowledge",
                 "provider": "curated-local",
-            }
-        if _AFFIRM.match(text):
-            return {
-                "response": _with_name(
-                    "Understood — yes. I’ll continue with that in mind.",
-                    username,
-                ),
-                "source": "intent",
-                "provider": "local",
             }
         remembered = _REMEMBER.match(text)
         if remembered:
@@ -169,9 +158,7 @@ def answer_question(message, username=None, history=None, file=None, conversatio
             value = personal_fact.group(2).strip()
             return {
                 "response": _with_name(
-                    f"Great, I’ve got it — your {subject} is {value}. "
-                    f"I’ll remember that and can connect it to relevant local books "
-                    "when you ask.",
+                    f"😄 Great, I’ve got it — your {subject} is {value}. I’ll remember that.",
                     username,
                 ),
                 "source": "memory",
@@ -179,12 +166,22 @@ def answer_question(message, username=None, history=None, file=None, conversatio
             }
         if _GREETING.match(text):
             greeting = (
-                f"Hello {username}! How can I help you today?"
+                f"👋😄 Hello {username}! How can I help you today?"
                 if username
-                else "Hello! How can I help you today?"
+                else "👋😄 Hello! How can I help you today?"
             )
             return {
                 "response": greeting,
+                "source": "conversation",
+                "provider": "local",
+            }
+        if _NAME_QUESTION.match(text):
+            if username:
+                reply = f"😊 Your name is {username}, right?"
+            else:
+                reply = "🤔 I don’t know your name yet. Add it on the access form and I’ll remember you."
+            return {
+                "response": reply,
                 "source": "conversation",
                 "provider": "local",
             }
@@ -301,6 +298,62 @@ def answer_question(message, username=None, history=None, file=None, conversatio
         )
     fallback = _with_name(fallback, username)
     return {"response": fallback, "source": "independent", "provider": "local"}
+
+
+def _yes_no_reply(text, history, conversation, username):
+    """Answer yes or no from the line e-Chat just said."""
+    previous_bot = _last_assistant(conversation)
+    affirmed = bool(_AFFIRM.match(text))
+    name_confirm = _NAME_CONFIRM.search(previous_bot)
+    if name_confirm:
+        name = name_confirm.group(1).strip()
+        if affirmed:
+            reply = f"😄 Glad that's you — I'll keep calling you {name}."
+        else:
+            reply = "🙂 Okay. What should I call you? You can say, “My name is ….”"
+        return {"response": reply, "source": "conversation", "provider": "local"}
+
+    offer = _REMEMBER_OFFER.search(previous_bot)
+    prompt = _TELL_ME.search(previous_bot)
+    pending = _pending_personal_question(text, history)
+    subject = None
+    if prompt:
+        subject = prompt.group(1).strip()
+    elif pending:
+        subject = pending.group(2).strip()
+    elif offer:
+        subject = "that"
+    if subject:
+        if subject == "that":
+            reply = (
+                "Okay — tell me, and I’ll remember it."
+                if affirmed
+                else "🙂 That’s okay — I won’t guess until you choose to share it."
+            )
+        elif affirmed:
+            reply = (
+                f"Okay — tell me about your {subject}. "
+                f"You can say, “My {subject} is …,” and I’ll remember it."
+            )
+        else:
+            reply = (
+                f"🙂 That’s okay — I won’t guess. We can leave your {subject} "
+                "unknown until you choose to share it."
+            )
+        return {
+            "response": _with_name(reply, username),
+            "source": "conversation",
+            "provider": "local",
+        }
+    if affirmed:
+        reply = "👍 Understood — yes. I’ll continue with that in mind."
+    else:
+        reply = "🙂 Okay — I’ll leave that there."
+    return {
+        "response": _with_name(reply, username),
+        "source": "conversation",
+        "provider": "local",
+    }
 
 
 def _definition_from_local_or_wikipedia(text, independent, username):
