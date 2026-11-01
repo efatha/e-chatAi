@@ -74,14 +74,86 @@ const renderMemoryLinks = (filter = "") => {
     return;
   }
   threads.forEach((thread) => {
+    const row = document.createElement("div");
+    row.className = `memory-row${thread.id === activeConversationId ? " active" : ""}`;
+
     const link = document.createElement("button");
     link.type = "button";
-    link.className = `memory-link${thread.id === activeConversationId ? " active" : ""}`;
+    link.className = "memory-link";
     link.textContent = thread.title || "Conversation";
     link.title = thread.title || "Conversation";
     link.addEventListener("click", () => openConversation(thread.id));
-    memoryLinks.appendChild(link);
+
+    const rename = document.createElement("button");
+    rename.type = "button";
+    rename.className = "memory-action";
+    rename.textContent = "Edit";
+    rename.setAttribute("aria-label", `Rename ${thread.title || "conversation"}`);
+    rename.addEventListener("click", () => beginRename(row, thread.id));
+
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "memory-action memory-delete";
+    remove.textContent = "Delete";
+    remove.setAttribute("aria-label", `Delete ${thread.title || "conversation"}`);
+    remove.addEventListener("click", () => deleteConversation(thread.id));
+
+    row.append(link, rename, remove);
+    memoryLinks.appendChild(row);
   });
+};
+
+const updateThreadTitle = (conversationId, title) => {
+  const clean = String(title || "").replace(/\s+/g, " ").trim();
+  if (!clean) return;
+  const threads = readThreads();
+  const thread = threads.find((item) => item.id === conversationId);
+  if (!thread) return;
+  thread.title = clean.length > 80 ? `${clean.slice(0, 80).trim()}…` : clean;
+  thread.updatedAt = new Date().toISOString();
+  saveThreads(threads);
+  renderMemoryLinks(memorySearch.value);
+};
+
+const beginRename = (row, conversationId) => {
+  const thread = readThreads().find((item) => item.id === conversationId);
+  if (!thread) return;
+  const link = row.querySelector(".memory-link");
+  const input = document.createElement("input");
+  input.className = "memory-rename";
+  input.type = "text";
+  input.value = thread.title || "";
+  input.setAttribute("aria-label", "Conversation title");
+  input.maxLength = 80;
+  let finished = false;
+  const finish = (save) => {
+    if (finished) return;
+    finished = true;
+    if (save) updateThreadTitle(conversationId, input.value);
+    else renderMemoryLinks(memorySearch.value);
+  };
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      finish(true);
+    }
+    if (event.key === "Escape") finish(false);
+  });
+  input.addEventListener("blur", () => finish(true));
+  link.replaceWith(input);
+  input.focus();
+  input.select();
+};
+
+const deleteConversation = (conversationId) => {
+  const threads = readThreads().filter((thread) => thread.id !== conversationId);
+  saveThreads(threads);
+  if (activeConversationId === conversationId) {
+    activeConversationId = null;
+    clearChatPanel();
+    setWelcomeVisible(true);
+  }
+  renderMemoryLinks(memorySearch.value);
 };
 
 const renderStoredMessage = (item) => {

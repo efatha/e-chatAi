@@ -104,11 +104,22 @@ body{
     gap: 5px;
     padding: 2px;
 }
+.memory-row{
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    border-radius: 9px;
+}
+.memory-row:hover,
+.memory-row.active{
+    background: rgba(57, 125, 146, 0.14);
+}
 .memory-link{
-    width: 100%;
+    flex: 1;
+    min-width: 0;
     border: 0;
     border-radius: 9px;
-    padding: 10px 11px;
+    padding: 10px 8px 10px 11px;
     overflow: hidden;
     color: var(--efa-gray-800);
     background: transparent;
@@ -117,9 +128,34 @@ body{
     white-space: nowrap;
     cursor: pointer;
 }
-.memory-link:hover,
-.memory-link.active{
-    background: rgba(57, 125, 146, 0.14);
+.memory-action{
+    flex: 0 0 auto;
+    border: 0;
+    border-radius: 7px;
+    padding: 4px 6px;
+    color: var(--efa-gray-600);
+    background: transparent;
+    font-size: 0.68rem;
+    font-weight: 700;
+    cursor: pointer;
+}
+.memory-action:hover{
+    color: var(--efa-sea);
+    background: rgba(255, 255, 255, 0.7);
+}
+.memory-delete:hover{
+    color: #9b3b4a;
+}
+.memory-rename{
+    flex: 1;
+    min-width: 0;
+    margin: 6px 4px 6px 8px;
+    padding: 6px 8px;
+    border: 1px solid var(--efa-sea);
+    border-radius: 8px;
+    color: var(--efa-gray-800);
+    background: white;
+    font: inherit;
 }
 .memory-empty{
     padding: 18px 10px;
@@ -975,8 +1011,8 @@ form.is-recording #message-input {
    flex-direction: row;
    overflow-x: auto;
  }
- .memory-link{
-   min-width: 180px;
+ .memory-row{
+   min-width: 220px;
  }
  article{
   padding: 0px;
