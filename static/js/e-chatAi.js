@@ -424,6 +424,39 @@ const generateEchatResponse = async (incomingMsgDiv, conversationId, sentMessage
           msgElement.style.color = "#fff8f2";
         }
       }
+      if (data.portrait) {
+        const photo = document.createElement("img");
+        photo.className = "creator-photo";
+        photo.src = data.portrait;
+        photo.alt = "Efatha Rutakaza";
+        msgElement.prepend(photo);
+        const projects = document.createElement("div");
+        projects.className = "creator-projects";
+        (data.projects || []).forEach((project) => {
+          const link = document.createElement("a");
+          link.className = "creator-project";
+          link.href = project.url;
+          link.target = "_blank";
+          link.rel = "noopener";
+          link.innerHTML = `<img src="${project.icon}" alt=""> <span><strong>${escapeHtml(project.name || "")}</strong> ${escapeHtml(project.note || "")}</span>`;
+          projects.appendChild(link);
+        });
+        if (projects.childElementCount) msgElement.appendChild(projects);
+        const asks = document.createElement("div");
+        asks.className = "creator-asks";
+        (data.followups || []).forEach((question) => {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = "creator-ask";
+          button.textContent = question;
+          button.addEventListener("click", () => {
+            msgInput.value = question;
+            handleOutgoingMsg();
+          });
+          asks.appendChild(button);
+        });
+        if (asks.childElementCount) msgElement.appendChild(asks);
+      }
       finishMessage(incomingMsgDiv);
       addThreadMessage(conversationId, "assistant", data.response);
       return;

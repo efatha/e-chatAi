@@ -19,6 +19,18 @@
     {
       "keywords": ["tell me about your creator"],
       "response": "Efatha Rutakaza lives in Kampala, Uganda. He enjoys music, Bible study, and strategy games."
+    },
+    {
+      "keywords": ["what does efatha explore", "efatha explore", "efatha exploration"],
+      "response": "Efatha Rutakaza approaches his work as a scientist of exploration. He tests software ideas, studies how people learn, and keeps the tools that prove useful."
+    },
+    {
+      "keywords": ["efatha leisure", "his leisure", "efatha free time"],
+      "response": "For leisure, Efatha Rutakaza enjoys music, Bible study, and strategy games. He lives in Kampala, Uganda."
+    },
+    {
+      "keywords": ["what else has efatha built", "efatha built", "efatha projects"],
+      "response": "Efatha Rutakaza’s public software is e-Chat, the research assistant on this platform. A live copy is at https://e-chatai.onrender.com/."
     }
   ],
   "word_meanings": {

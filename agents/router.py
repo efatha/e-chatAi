@@ -369,11 +369,25 @@ def _local_knowledge(text, independent, username):
                 best_length = len(word)
     if not best:
         return None
-    return {
+    result = {
         "response": _with_name(best, username),
         "source": "knowledge",
         "provider": "data.json",
     }
+    if "efatha" in lowered:
+        result["portrait"] = "/static/images/efatha.jpg"
+        result["projects"] = [{
+            "name": "e-Chat",
+            "url": "https://e-chatai.onrender.com/",
+            "icon": "/static/images/artificial-intelligence.png",
+            "note": "Live research assistant.",
+        }]
+        result["followups"] = [
+            "What does Efatha explore?",
+            "How does Efatha spend his leisure?",
+            "What else has Efatha built?",
+        ]
+    return result
 
 
 def _yes_no_reply(text, history, conversation, username):
