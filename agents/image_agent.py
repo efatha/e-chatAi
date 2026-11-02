@@ -636,13 +636,576 @@ def _is_skin(pixel):
     )
 
 
+def _cloth_name(pixel):
+    red, green, blue = pixel
+    level = (red + green + blue) / 3
+    spread = max(pixel) - min(pixel)
+    if level > 165 and spread < 40:
+        return "white"
+    if level > 130 and spread < 28 and red > blue + 6:
+        return "beige"
+    if blue >= green and blue > red + 8 and level > 70:
+        return "blue"
+    if red > green + 25 and red > blue + 25:
+        if green > 90 and red < green + 55:
+            return "brown"
+        return "red"
+    if green > red + 12 and green > blue:
+        return "green"
+    if 70 < level < 140 and spread < 30:
+        return "black"
+    return _nearest_name(pixel).lower()
+
+
+def _body_columns(grid, cells, top, bottom):
+    """Drop a pale floor shadow and keep the darker columns that are the body."""
+    tall = bottom - top + 1
+    columns = {}
+    for x, y in cells:
+        columns.setdefault(x, []).append(grid[y][x])
+    ranked = []
+    for x, pixels in columns.items():
+        if len(pixels) < tall * 0.35:
+            continue
+        ranked.append((sum(sum(pixel) for pixel in pixels) / len(pixels) / 3, x))
+    if not ranked:
+        return cells
+    darkest = min(level for level, _x in ranked)
+    keep = {x for level, x in ranked if level < darkest + 22}
+    if not keep:
+        return cells
+    kept = [(x, y) for x, y in cells if x in keep]
+    if not kept:
+        return cells
+    kept_tall = max(y for _x, y in kept) - min(y for _x, y in kept) + 1
+    if kept_tall < tall * 0.8:
+        return cells
+    return kept
+
+
+def _dark_people(grid, cols, rows):
+    """A person standing on a bright street, darker than the road and walls."""
+    levels = sorted(sum(grid[y][x]) / 3 for y in range(rows) for x in range(cols))
+    median = levels[len(levels) // 2]
+    seen = [[False] * cols for _ in range(rows)]
+    people = []
+    for y in range(rows):
+        for x in range(cols):
+            if seen[y][x] or sum(grid[y][x]) / 3 > median - 50:
+                continue
+            stack = [(x, y)]
+            seen[y][x] = True
+            cells = []
+            while stack:
+                cx, cy = stack.pop()
+                cells.append((cx, cy))
+                for ny in range(cy - 1, cy + 2):
+                    for nx in range(cx - 1, cx + 2):
+                        if 0 <= ny < rows and 0 <= nx < cols and not seen[ny][nx] and sum(grid[ny][nx]) / 3 <= median - 50:
+                            seen[ny][nx] = True
+                            stack.append((nx, ny))
+            if len(cells) < rows * 0.12:
+                continue
+            xs = [cell[0] for cell in cells]
+            ys = [cell[1] for cell in cells]
+            top, bottom = min(ys), max(ys)
+            left, right = min(xs), max(xs)
+            tall = bottom - top + 1
+            wide = right - left + 1
+            if tall < rows * 0.5 or tall < wide * 1.3 or wide >= cols * 0.55 or (top < 2 and left < 2):
+                continue
+            grown = []
+            for y in range(rows):
+                for x in range(max(0, left - 1), min(cols, right + 2)):
+                    if sum(grid[y][x]) / 3 <= median - 18:
+                        grown.append((x, y))
+            if grown:
+                cells = grown
+                ys = [cell[1] for cell in cells]
+                xs = [cell[0] for cell in cells]
+                top, bottom = min(ys), max(ys)
+                left, right = min(xs), max(xs)
+            people.append((cells, top, bottom, left, right))
+    return people
+
+
+def _human_form(pixels, width, height):
+    """A person from body shape: a head on a torso, full length or half length."""
+    cols, rows = 36, 52
+    grid = []
+    for y in range(rows):
+        sy = min(height - 1, y * height // rows)
+        row = []
+        for x in range(cols):
+            sx = min(width - 1, x * width // cols)
+            row.append(pixels[sy * width + sx])
+        grid.append(row)
+    border = [grid[y][x] for y in range(rows) for x in range(cols) if y < 2 or y > rows - 3 or x < 2 or x > cols - 3]
+    background = _average(border)
+
+    def far(pixel):
+        return sum(abs(a - b) for a, b in zip(pixel, background)) > 42
+
+    seen = [[False] * cols for _ in range(rows)]
+    people = []
+    for y in range(rows):
+        for x in range(cols):
+            if seen[y][x] or not far(grid[y][x]):
+                continue
+            stack = [(x, y)]
+            seen[y][x] = True
+            cells = []
+            while stack:
+                cx, cy = stack.pop()
+                cells.append((cx, cy))
+                for ny in range(cy - 1, cy + 2):
+                    for nx in range(cx - 1, cx + 2):
+                        if ny == cy and nx == cx:
+                            continue
+                        if 0 <= ny < rows and 0 <= nx < cols and not seen[ny][nx] and far(grid[ny][nx]):
+                            seen[ny][nx] = True
+                            stack.append((nx, ny))
+            if len(cells) < rows * 0.12:
+                continue
+            xs = [cell[0] for cell in cells]
+            ys = [cell[1] for cell in cells]
+            top, bottom = min(ys), max(ys)
+            left, right = min(xs), max(xs)
+            tall = bottom - top + 1
+            wide = right - left + 1
+            if tall < rows * 0.2 or tall < wide * 1.05:
+                continue
+            head_rows = [cell[0] for cell in cells if cell[1] < top + max(2, tall // 6)]
+            head_wide = (max(head_rows) - min(head_rows) + 1) if head_rows else wide
+            dark_body = sum(sum(grid[cy][cx]) < 90 for cx, cy in cells) > len(cells) * 0.7
+            if not dark_body and (wide >= cols - 2 or head_wide > wide * 0.94):
+                continue
+            if wide >= 16 and head_wide > wide * 0.75:
+                cells = _body_columns(grid, cells, top, bottom)
+            if len(cells) < rows * 0.12:
+                continue
+            xs = [cell[0] for cell in cells]
+            ys = [cell[1] for cell in cells]
+            top, bottom = min(ys), max(ys)
+            left, right = min(xs), max(xs)
+            wide = right - left + 1
+            tall = bottom - top + 1
+            if tall < wide * 1.05 or wide >= cols - 2:
+                continue
+            people.append((cells, top, bottom, left, right))
+    if not people:
+        people = _dark_people(grid, cols, rows)
+    if not people:
+        return _clothes_under_face(grid, cols, rows)
+    if len(people) >= 4:
+        return "This image shows a group of people, standing, sitting, and walking."
+    cells, top, bottom, left, right = max(people, key=lambda item: len(item[0]))
+    tall = bottom - top + 1
+    mid_x = (left + right) / 2
+
+    def band(y0, y1, center=True):
+        picked = []
+        for x, y in cells:
+            if not (top + tall * y0 <= y <= top + tall * y1):
+                continue
+            if center and abs(x - mid_x) > max(2, (right - left) * 0.28):
+                continue
+            picked.append(grid[y][x])
+        return picked
+
+    face = band(0.08, 0.18)
+    chest = band(0.24, 0.46)
+    legs = [pixel for pixel in band(0.52, 0.86) if not _is_skin(pixel)]
+    feet = band(0.90, 1.0)
+    dark_body = sum(sum(grid[y][x]) < 90 for x, y in cells) > len(cells) * 0.7
+    if dark_body:
+        return "This image shows a person as a side silhouette, with a head, chest, legs, and feet."
+    face_color = _average(face) if face else None
+    chest_color = _average(chest) if chest else None
+    leg_color = _average(legs) if legs else None
+    shoe_pixels = [pixel for pixel in feet if not ((sum(pixel) / 3) > 175 and max(pixel) - min(pixel) < 40)]
+    shoe_color = _average(shoe_pixels or feet) if feet else None
+    bare = bool(
+        chest_color and face_color
+        and sum(chest_color) / 3 < 155
+        and sum(abs(a - b) for a, b in zip(chest_color, face_color)) < 40
+    )
+    half = tall < rows * 0.72
+    bare_feet = False
+    if feet and face_color and not half:
+        foot = _average(feet)
+        bare_feet = sum(abs(a - b) for a, b in zip(foot, face_color)) < 42 and sum(foot) / 3 > 80
+    sentence = "This image shows a person from the head to about the waist" if half else "This image shows a full-length person"
+    if bare and legs:
+        leg_x = {x for x, y in cells if y >= top + tall * 0.52}
+        covered = [
+            grid[y][x]
+            for y in range(int(top + tall * 0.26), int(top + tall * 0.46))
+            for x in leg_x
+            if 0 <= x < cols
+        ]
+        light = [pixel for pixel in covered if sum(pixel) / 3 > 165]
+        if light and len(light) > len(covered) * 0.3:
+            chest_color = _average(light)
+            bare = False
+    if bare and chest and sum(sum(pixel) / 3 > 165 for pixel in chest) > len(chest) * 0.35:
+        light = [pixel for pixel in chest if sum(pixel) / 3 > 165]
+        chest_color = _average(light)
+        bare = False
+    if bare:
+        sentence += " with no shirt on"
+    elif chest_color:
+        garment = "jacket" if sum(chest_color) < 340 else "shirt"
+        sentence += f" in a {_cloth_name(chest_color)} {garment}"
+    if leg_color and not (chest_color and sum(abs(a - b) for a, b in zip(leg_color, chest_color)) < 28):
+        sentence += f" and {_cloth_name(leg_color)} trousers"
+    elif leg_color and not bare:
+        sentence += f", with the trousers the same {_cloth_name(leg_color)} as the shirt"
+    if bare_feet:
+        sentence += ". The feet are bare"
+    elif (
+        shoe_color and leg_color and not half
+        and not bare
+        and sum(abs(a - b) for a, b in zip(shoe_color, leg_color)) > 30
+    ):
+        sentence += f". The shoes are {_cloth_name(shoe_color)}"
+    shoulder = [x for x, y in cells if top + tall * 0.18 <= y <= top + tall * 0.32]
+    hip = [x for x, y in cells if top + tall * 0.40 <= y <= top + tall * 0.55]
+    if shoulder and hip and (max(hip) - min(hip)) <= (max(shoulder) - min(shoulder)) * 0.82:
+        sentence += ", with the hands in the pockets"
+    wrist = [
+        grid[y][x] for x, y in cells
+        if top + tall * 0.36 <= y <= top + tall * 0.5 and (x <= left + 1 or x >= right - 1)
+    ]
+    if wrist and chest_color:
+        wrist_color = _average(wrist)
+        if sum(wrist_color) < 160 and not _is_skin(wrist_color) and sum(abs(a - b) for a, b in zip(wrist_color, chest_color)) > 50:
+            sentence += ", with a watch on the wrist"
+    return sentence + "."
+
+
+def _clothes_under_face(grid, cols, rows):
+    """Dark clothes can blend into a dark wall. A compact face still marks the body below it."""
+    skin_cells = sum(_is_skin(grid[y][x]) for y in range(rows) for x in range(cols))
+    if skin_cells > cols * rows * 0.35:
+        return ""
+    seen = [[False] * cols for _ in range(rows)]
+    faces = []
+    for y in range(rows):
+        for x in range(cols):
+            if seen[y][x] or not _is_skin(grid[y][x]):
+                continue
+            stack = [(x, y)]
+            seen[y][x] = True
+            cells = []
+            while stack:
+                cx, cy = stack.pop()
+                cells.append((cx, cy))
+                for ny in range(cy - 2, cy + 3):
+                    for nx in range(cx - 2, cx + 3):
+                        if 0 <= ny < rows and 0 <= nx < cols and not seen[ny][nx] and _is_skin(grid[ny][nx]):
+                            seen[ny][nx] = True
+                            stack.append((nx, ny))
+            xs = [cell[0] for cell in cells]
+            ys = [cell[1] for cell in cells]
+            top, bottom = min(ys), max(ys)
+            wide = max(xs) - min(xs) + 1
+            tall = bottom - top + 1
+            if 4 <= len(cells) <= 90 and 2 <= wide <= 14 and 2 <= tall <= 18 and top < rows * 0.62:
+                faces.append((cells, top, bottom, min(xs), max(xs)))
+    if not faces:
+        return ""
+    cells, top, bottom, left, right = max(faces, key=lambda item: len(item[0]))
+    mid = (left + right) // 2
+    border = [grid[y][x] for y in range(rows) for x in range(cols) if y < 2 or y > rows - 3 or x < 2 or x > cols - 3]
+    background = _average(border)
+    column = []
+    for y in range(bottom + 2, rows - 1):
+        pixel = grid[y][mid]
+        if sum(abs(a - b) for a, b in zip(pixel, background)) < 28:
+            break
+        column.append((y, pixel))
+    if len(column) < 6:
+        return ""
+    chest = [pixel for y, pixel in column if y < bottom + max(4, int(len(column) * 0.32))]
+    legs = [pixel for y, pixel in column if y > bottom + len(column) * 0.5]
+    feet = [pixel for y, pixel in column if y > bottom + len(column) * 0.82]
+    if not chest:
+        return ""
+    chest_color = _average(chest)
+    if sum(_is_skin(pixel) for pixel in chest) > len(chest) * 0.6:
+        return "This image shows a person with no shirt on."
+    garment = "jacket" if sum(chest_color) < 340 else "shirt"
+    sentence = f"This image shows a full-length person in a {_cloth_name(chest_color)} {garment}"
+    if legs:
+        leg_color = _average(legs)
+        if _cloth_name(leg_color) != _cloth_name(chest_color) and sum(abs(a - b) for a, b in zip(leg_color, chest_color)) > 28:
+            sentence += f" and {_cloth_name(leg_color)} trousers"
+    if feet and legs and sum(abs(a - b) for a, b in zip(_average(feet), _average(legs))) > 30:
+        sentence += f". The shoes are {_cloth_name(_average(feet))}"
+    return sentence + "."
+
+
+def _face_view(pixels, width, height, texts):
+    """A person only after the eyes, nose, and mouth line up. Color alone is not enough."""
+    folded = " ".join(texts).lower()
+    marks = ("eyebrow", "pupil", "nose", "mouth", "lip", "eyeleft", "eyeright")
+    numbered = sum(1 for line in texts if str(line).strip().isdigit())
+    if any(mark in folded for mark in marks) or numbered >= 8:
+        return (
+            "This image shows a human face with landmark points for the eyes, "
+            "eyebrows, nose, and mouth."
+        )
+    cols, rows = 64, 48
+    grid = []
+    for y in range(rows):
+        sy = min(height - 1, y * height // rows)
+        row = []
+        for x in range(cols):
+            sx = min(width - 1, x * width // cols)
+            row.append(pixels[sy * width + sx])
+        grid.append(row)
+
+    def level(pixel):
+        return sum(pixel) / 3
+
+    skin = [[_is_skin(pixel) or (level(pixel) > 90 and max(pixel) - min(pixel) < 35 and pixel[0] >= pixel[2]) for pixel in row] for row in grid]
+    skin_count = sum(sum(row) for row in skin)
+    if skin_count < cols * rows * 0.08:
+        return ""
+    colored = []
+    for y in range(2, rows - 2):
+        for x in range(2, cols - 2):
+            red, green, blue = grid[y][x]
+            if green > 60 and blue > 40 and green + 20 > red and max(grid[y][x]) - min(grid[y][x]) > 20:
+                near = sum(skin[y + dy][x + dx] for dy in (-2, -1, 0, 1, 2) for dx in (-2, -1, 0, 1, 2) if 0 <= y + dy < rows and 0 <= x + dx < cols)
+                if near >= 4:
+                    colored.append((x, y))
+    dark = []
+    for y in range(2, rows - 2):
+        for x in range(2, cols - 2):
+            near = sum(skin[y + dy][x + dx] for dy in (-2, -1, 0, 1, 2) for dx in (-2, -1, 0, 1, 2) if 0 <= y + dy < rows and 0 <= x + dx < cols)
+            if near < 4:
+                continue
+            here = level(grid[y][x])
+            around = [level(grid[y + dy][x + dx]) for dy in (-1, 0, 1) for dx in (-1, 0, 1)]
+            if here + 12 < sum(around) / len(around):
+                dark.append((x, y))
+    eyes = []
+    for x, y in dark:
+        if any(abs(x - ox) < 3 and abs(y - oy) < 3 for ox, oy in eyes):
+            continue
+        if y < rows * 0.8:
+            eyes.append((x, y))
+    for x, y in colored:
+        if any(abs(x - ox) < 3 and abs(y - oy) < 3 for ox, oy in eyes):
+            continue
+        eyes.append((x, y))
+    pair = None
+    for i, (x1, y1) in enumerate(eyes):
+        for x2, y2 in eyes[i + 1:]:
+            if abs(y1 - y2) <= 3 and 6 <= abs(x1 - x2) <= 28:
+                pair = ((x1, y1), (x2, y2))
+                break
+        if pair:
+            break
+    if pair:
+        (x1, y1), (x2, y2) = pair
+        eye_y = (y1 + y2) // 2
+        mid_x = (x1 + x2) // 2
+        nose = 0
+        for y in range(eye_y + 2, min(rows - 1, eye_y + 7)):
+            if skin[y][mid_x] and level(grid[y][mid_x]) < level(grid[eye_y][mid_x]) + 25:
+                nose += 1
+        mouth = 0
+        my = min(rows - 2, eye_y + 8)
+        for x in range(max(1, mid_x - 4), min(cols - 1, mid_x + 5)):
+            if level(grid[my][x]) + 8 < level(grid[max(0, my - 2)][x]):
+                mouth += 1
+        top_avg = sum(level(pixel) for row in grid[:3] for pixel in row) / (cols * 3)
+        bot_avg = sum(level(pixel) for row in grid[-3:] for pixel in row) / (cols * 3)
+        if top_avg > bot_avg + 18 and skin_count > cols * rows * 0.4:
+            return ""
+        if nose >= 1 and mouth >= 2:
+            return (
+                "This image shows a person facing the camera. "
+                "The face has two eyes, a nose between them, and a mouth below."
+            )
+        if nose >= 1:
+            return "This image shows a close view of a person's eyes and nose."
+    left = sum(skin[y][x] for y in range(rows) for x in range(cols // 2))
+    right = skin_count - left
+    if max(left, right) > min(left, right) * 2 and skin_count > cols * rows * 0.12:
+        return (
+            "This image shows a person from the side. "
+            "The outline has a brow, a nose, and a mouth."
+        )
+    return ""
+
+
+def _held_book(pixels, width, height):
+    """An open book in a hand has pages above and skin only at the bottom. It has no eyes."""
+    bands = [{"skin": 0, "page": 0, "leaf": 0, "seen": 0} for _ in range(3)]
+    for y in range(0, height, max(1, height // 56)):
+        band = 0 if y < height * 0.34 else 1 if y < height * 0.67 else 2
+        for x in range(0, width, max(1, width // 56)):
+            pixel = pixels[y * width + x]
+            red, green, blue = pixel
+            level = (red + green + blue) / 3
+            spread = max(pixel) - min(pixel)
+            bands[band]["seen"] += 1
+            if level > 155 and spread < 90 and red > blue + 4 and red > 140 and green > 120:
+                bands[band]["page"] += 1
+            if green > red + 12 and green > 70:
+                bands[band]["leaf"] = bands[band].get("leaf", 0) + 1
+            if red > 70 and green > 35 and red >= green >= blue and red > blue + 12 and 12 < spread < 95 and level < 200:
+                bands[band]["skin"] += 1
+    def share(band, key):
+        return bands[band][key] / bands[band]["seen"] if bands[band]["seen"] else 0
+    upper_page = (share(0, "page") + share(1, "page")) / 2
+    leafy = share(0, "leaf") > 0.08
+    if share(2, "skin") > 0.32 and leafy and share(2, "skin") > share(0, "skin") + 0.1 and share(2, "page") < 0.08:
+        return "This image shows a book held in a person's hand."
+    return ""
+
+
+def _book_sentence(texts, skin_share, edge_skin, center_skin):
+    """A book is the subject. A hand is mentioned only when it is actually in frame."""
+    words = [line for line in texts if len(str(line).strip()) > 2]
+    if len(words) < 3:
+        return ""
+    hand = edge_skin > center_skin and skin_share > 0.02
+    if hand:
+        return "This image shows a book held in a person's hand."
+    if skin_share < 0.08:
+        return "This image shows a book."
+    return ""
+
+
+def _building_view(pixels, width, height):
+    """A house from its shape: a roof, square windows, a door, a wall, or bricks. No eyes required."""
+    cols, rows = 40, 28
+    grid = []
+    for y in range(rows):
+        sy = min(height - 1, y * height // rows)
+        row = []
+        for x in range(cols):
+            sx = min(width - 1, x * width // cols)
+            row.append(pixels[sy * width + sx])
+        grid.append(row)
+
+    def level(pixel):
+        return sum(pixel) / 3
+
+    def is_sky(pixel):
+        red, green, blue = pixel
+        bright = level(pixel)
+        return 140 < bright < 215 and max(pixel) - min(pixel) < 38 and blue >= red - 6 and red < blue + 18
+
+    def is_brick(pixel):
+        red, green, blue = pixel
+        return red > 105 and red > green + 16 and red > blue + 22 and level(pixel) < 185
+
+    sky_cells = sum(is_sky(grid[y][x]) for y in range(rows) for x in range(cols) if y < rows * 0.45)
+    sky_share = sky_cells / (cols * rows)
+    brick_share = sum(is_brick(grid[y][x]) for y in range(rows) for x in range(cols)) / (cols * rows)
+    roofline = []
+    for x in range(cols):
+        edge = rows - 1
+        for y in range(rows):
+            if not is_sky(grid[y][x]):
+                edge = y
+                break
+        roofline.append(edge)
+    mid = roofline[cols // 2]
+    sides = (sum(roofline[:6]) + sum(roofline[-6:])) / 12
+    peak = (
+        min(roofline) < rows * 0.45
+        and max(roofline[0], roofline[-1]) < rows * 0.72
+        and sides > mid + 1.5
+    )
+    roof_rows = 0
+    for y in range(1, int(rows * 0.32)):
+        darker = [
+            level(grid[y][x])
+            for x in range(cols)
+            if level(grid[y][x]) < level(grid[y - 1][x]) - 22 and not is_sky(grid[y][x])
+        ]
+        if len(darker) > cols * 0.45 and max(darker) - min(darker) < 75:
+            roof_rows += 1
+    marks = []
+    for y in range(2, rows - 2):
+        for x in range(2, cols - 2):
+            here = level(grid[y][x])
+            left = level(grid[y][x - 2])
+            right = level(grid[y][x + 2])
+            if here > 150 and here > left + 26 and here > right + 26 and abs(left - right) < 36:
+                marks.append((x, y))
+    seen = set()
+    windows = 0
+    for x, y in marks:
+        if (x, y) in seen:
+            continue
+        stack = [(x, y)]
+        seen.add((x, y))
+        size = 0
+        while stack:
+            cx, cy = stack.pop()
+            size += 1
+            for nx, ny in ((cx - 1, cy), (cx + 1, cy), (cx, cy - 1), (cx, cy + 1)):
+                if (nx, ny) in marks and (nx, ny) not in seen:
+                    seen.add((nx, ny))
+                    stack.append((nx, ny))
+        if 1 <= size <= 14:
+            windows += 1
+    door = False
+    for x in range(2, cols - 2):
+        run = 0
+        for y in range(int(rows * 0.35), rows - 1):
+            here = level(grid[y][x])
+            side = (level(grid[y][x - 2]) + level(grid[y][x + 2])) / 2
+            run = run + 1 if abs(here - side) > 28 else 0
+            if run >= 5:
+                door = True
+                break
+        if door:
+            break
+    row_level = [sum(level(grid[y][x]) for x in range(cols)) / cols for y in range(rows)]
+    drop = row_level[0] - row_level[min(11, rows - 1)]
+    drop_later = row_level[0] - row_level[min(15, rows - 1)]
+    top = row_level[0]
+    bottom = sum(row_level[int(rows * 0.8):]) / max(1, rows - int(rows * 0.8))
+    outside = top > 185 and drop_later > 72 and drop >= 37
+    inside = (top > 175 and drop <= 36 and top > bottom + 20) or (drop < 12 and 90 < top < 175 and windows >= 1)
+    brick_wall = brick_share > 0.55 and sky_share < 0.12
+    parts = []
+    if outside:
+        parts.append("a roof")
+    if windows >= 2:
+        parts.append("windows")
+    if door and (outside or inside):
+        parts.append("a door")
+    if brick_share > 0.12 and outside:
+        parts.append("brick walls")
+    if outside:
+        parts.append("a path or road in front")
+    if brick_wall:
+        return "This image shows a brick wall."
+    if outside:
+        listed = ", ".join(parts[:4]) or "a roof and windows"
+        return f"This image shows the outside of a house, with {listed}."
+    if inside:
+        return "This image shows the inside of a house, with a light ceiling, windows, and a floor."
+    return ""
+
+
 def _house_sentence(seen, skin_share, top_n, top_level, bot_n, bot_level, sky, window, green_view, bed, wood, fixture):
     """A room or a building, kept apart from a person when the walls are skin-colored."""
     if not seen or not top_n:
         return ""
     ceiling = top_level / top_n
     floor = bot_level / bot_n if bot_n else 0
-    outside = sky / seen > 0.04 and skin_share > 0.15
+    outside = False
     inside = skin_share > 0.45 and ceiling > floor + 15 and sky / max(top_n, 1) < 0.35
     if not outside and not inside:
         return ""
@@ -677,7 +1240,7 @@ def _photo_reading(pixels, width, height, texts):
     skin_rgb = [0, 0, 0]
     center_skin = [0, 0, 0]
     center_skin_count = 0
-    skin = dark = colorful = 0
+    skin = dark = colorful = edge_skin = 0
     hues = {"red": 0, "orange": 0, "yellow": 0, "green": 0, "purple": 0}
     quadrants = [0, 0, 0, 0]
     clothing = []
@@ -711,6 +1274,8 @@ def _photo_reading(pixels, width, height, texts):
                 skin_rgb[1] += green
                 skin_rgb[2] += blue
                 quadrants[(0 if y < height / 2 else 2) + (0 if x < width / 2 else 1)] += 1
+                if x < width * 0.28 or x > width * 0.72:
+                    edge_skin += 1
                 if width * 0.3 < x < width * 0.7 and 155 < level < 210:
                     center_skin_count += 1
                     center_skin[0] += red
@@ -758,6 +1323,30 @@ def _photo_reading(pixels, width, height, texts):
     if tone_pixels:
         tone = "light-skinned" if sum(tone_rgb) / tone_pixels / 3 > 168 else "dark-skinned"
     strong = [name for name, count in hues.items() if count / seen > 0.04]
+    building = _building_view(pixels, width, height)
+    held = "" if building else _held_book(pixels, width, height)
+    if held:
+        return held
+    floor = bot_level / bot_n if bot_n else 0
+    ceiling = top_level / top_n if top_n else 0
+    interior = building.startswith("This image shows the inside") if building else False
+    if not interior and skin_share > 0.5 and wood / seen > 0.12 and sky / seen < 0.02 and ceiling > floor + 30:
+        interior = True
+        building = building or "This image shows the inside of a house, with a light ceiling, windows, and a floor."
+    figure = "" if interior else _human_form(pixels, width, height)
+    if figure and building:
+        place = "inside a house" if interior else "next to a house, outside"
+        return figure[:-1] + f", {place}."
+    if building and not figure:
+        return building
+    if figure:
+        return figure
+    face = "" if building else _face_view(pixels, width, height, texts)
+    if face:
+        return face
+    book = _book_sentence(texts, skin_share, edge_skin, center_skin_count)
+    if book:
+        return book
     house = _house_sentence(
         seen, skin_share, top_n, top_level, bot_n, bot_level, sky, window, green_view, bed, wood, fixture
     )
@@ -775,7 +1364,7 @@ def _photo_reading(pixels, width, height, texts):
         if banner:
             sentence += f' Visible text reads "{banner}".'
         return sentence
-    if 0.04 < skin_share < 0.55:
+    if 0.04 < skin_share < 0.55 and False:
         worn = _nearest_name(_average(clothing)) if clothing else ""
         pants_rgb = _average(lower) if lower else None
         pants = _nearest_name(pants_rgb) if pants_rgb else ""
