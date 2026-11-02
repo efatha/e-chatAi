@@ -348,10 +348,11 @@ def _describe(pixels, width, height, kind, question, lines, intent="meaning"):
     texts = [_line_text(line) for line in lines]
     photo = _photo_reading(pixels, width, height, texts)
     if photo and intent != "text":
-        return photo
+        return _mention_text(photo, texts)
     forms = "" if photo else _shape_counts(pixels, width, height)
     subject, detail = _named_subject(pixels, width, height, lines, main_name)
-    return _answer(question, intent, subject, detail, main_name, "", texts, forms)
+    names = [name for name, _share in fields[:3]]
+    return _answer(question, intent, subject, detail, main_name, "", texts, forms, width, height, names)
 
 
 def _shape_counts(pixels, width, height):
@@ -499,27 +500,64 @@ _ASKED_OBJECTS = (
 )
 
 
-def _answer(question, intent, subject, detail, color, form, texts, forms=""):
+def _readable(texts):
+    short = _caption_lines(texts)
+    if short:
+        return short
+    kept = []
+    for text in texts:
+        clean = " ".join(str(text).split())
+        if clean and clean not in kept:
+            kept.append(clean)
+    return kept[:6]
+
+
+def _mention_text(sentence, texts):
+    """Keep any words that can be read, even when the subject is already named."""
+    readable = _readable(texts)
+    if not readable:
+        return sentence
+    folded = sentence.lower()
+    fresh = [line for line in readable if line.lower() not in folded]
+    if not fresh:
+        return sentence
+    shown = "; ".join(fresh[:6])
+    return sentence.rstrip(".") + f'. Readable text: "{shown}".'
+
+
+def _unknown_view(color, width, height, texts, forms, names):
+    """When no object is known, answer from color, size, and any writing."""
+    palette = ", ".join(dict.fromkeys(names or ([color] if color else [])))
+    openings = [
+        f"I cannot name the object yet. The picture is {width} by {height}" + (f", and the colors I can separate are {palette}" if palette else ""),
+        f"The subject is still unclear. This is a {width} by {height} picture" + (f" led by {palette}" if palette else ""),
+        f"I do not recognize a specific thing here. The frame measures {width} by {height}" + (f" and stays in {palette}" if palette else ""),
+    ]
+    sentence = openings[(width + height + len(texts)) % len(openings)] + "."
+    if forms:
+        sentence += " " + forms[0].upper() + forms[1:] + "."
+    return _mention_text(sentence, texts)
+
+
+def _answer(question, intent, subject, detail, color, form, texts, forms="", width=0, height=0, names=None):
     """Answer the question from visible color, form, subject, and legible words."""
     lowered = (question or "").lower()
     if intent == "text":
         if not texts:
             return "The text is too blurry to read accurately."
-        return "The legible text reads: " + "; ".join(texts[:8]) + "."
+        return "The legible text reads: " + "; ".join(_readable(texts)[:8]) + "."
+    if not subject:
+        reply = _unknown_view(color, width, height, texts, forms, names)
+        asked = next((word for word in _ASKED_OBJECTS if re.search(rf"\b{word}\b", lowered)), "")
+        if asked:
+            reply += f" I cannot clearly identify a {asked} in it."
+        return reply
     asked = next((word for word in _ASKED_OBJECTS if re.search(rf"\b{word}\b", lowered)), "")
     if asked and asked not in (subject or "") and asked not in (detail or ""):
-        visible = _visible_clause(subject, detail, color, form, texts[:1], forms)
-        return f"{visible} I cannot clearly identify a {asked} in it."
-    if intent == "detail":
-        lead = _visible_clause(subject, detail, color, form, [], forms)
-        extra = []
-        headings = _caption_lines(texts)
-        if headings:
-            extra.append("Visible labels include " + ", ".join(headings) + ".")
-        if not subject:
-            extra.append("I cannot clearly identify a specific object beyond that screen.")
-        return " ".join([lead] + extra)
-    return _visible_clause(subject, detail, color, form, [] if subject else _caption_lines(texts)[:5], forms)
+        visible = _visible_clause(subject, detail, color, form, [], forms)
+        return _mention_text(f"{visible} I cannot clearly identify a {asked} in it.", texts)
+    lead = _visible_clause(subject, detail, color, form, [], forms)
+    return _mention_text(lead, texts)
 
 
 def _visible_clause(subject, detail, color, form, texts, forms=""):
