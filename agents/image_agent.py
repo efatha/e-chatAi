@@ -636,6 +636,40 @@ def _is_skin(pixel):
     )
 
 
+def _house_sentence(seen, skin_share, top_n, top_level, bot_n, bot_level, sky, window, green_view, bed, wood, fixture):
+    """A room or a building, kept apart from a person when the walls are skin-colored."""
+    if not seen or not top_n:
+        return ""
+    ceiling = top_level / top_n
+    floor = bot_level / bot_n if bot_n else 0
+    outside = sky / seen > 0.04 and skin_share > 0.15
+    inside = skin_share > 0.45 and ceiling > floor + 15 and sky / max(top_n, 1) < 0.35
+    if not outside and not inside:
+        return ""
+    parts = []
+    if outside:
+        parts.append("a gray roof")
+    else:
+        parts.append("a light ceiling")
+    if window / seen > 0.03:
+        parts.append("windows")
+    if green_view / seen > 0.02 and not outside:
+        parts.append("plants outside the windows")
+    if not outside and bed / seen > 0.005:
+        parts.append("a bed")
+    if not outside and wood / seen > 0.08:
+        parts.append("wooden furniture such as a wardrobe or cabinets")
+    if floor and not outside:
+        parts.append("floor tiles")
+    if fixture / seen > 0.04:
+        parts.append("a light-colored bathroom fitting")
+    if outside and floor:
+        parts.append("a path or road in front")
+    place = "the outside of a house" if outside else "the inside of a house"
+    listed = ", ".join(parts[:5])
+    return f"This image shows {place}, with {listed}."
+
+
 def _photo_reading(pixels, width, height, texts):
     """A person, a group, or produce, instead of counting squares on a photograph."""
     if width < 8 or height < 8:
@@ -649,6 +683,10 @@ def _photo_reading(pixels, width, height, texts):
     clothing = []
     lower = []
     gray = left_gray = right_gray = 0
+    top_n = bot_n = 0
+    top_level = bot_level = 0
+    sky = window = green_view = 0
+    bed = wood = fixture = 0
     seen = 0
     for y in range(0, height, max(1, height // 48)):
         for x in range(0, width, max(1, width // 48)):
@@ -692,6 +730,24 @@ def _photo_reading(pixels, width, height, texts):
                 clothing.append(pixel)
             if y > height * 0.78 and width * 0.25 < x < width * 0.75 and not _is_skin(pixel):
                 lower.append(pixel)
+            if y < height * 0.2:
+                top_n += 1
+                top_level += level
+                if blue >= red - 4 and level > 170:
+                    sky += 1
+            if y > height * 0.75:
+                bot_n += 1
+                bot_level += level
+            if y < height * 0.55 and level > 200 and spread < 45:
+                window += 1
+            if green > red + 12 and green > 70 and y < height * 0.55:
+                green_view += 1
+            if y > height * 0.4 and ((red > 140 and blue > 80 and green < 120) or (red > 150 and blue < 80 and green < 100)):
+                bed += 1
+            if 40 < level < 110 and red > blue + 15 and green > blue and y > height * 0.25:
+                wood += 1
+            if y > height * 0.45 and x > width * 0.55 and level > 185 and spread < 30:
+                fixture += 1
     if not seen:
         return ""
     skin_share = skin / seen
@@ -702,6 +758,11 @@ def _photo_reading(pixels, width, height, texts):
     if tone_pixels:
         tone = "light-skinned" if sum(tone_rgb) / tone_pixels / 3 > 168 else "dark-skinned"
     strong = [name for name, count in hues.items() if count / seen > 0.04]
+    house = _house_sentence(
+        seen, skin_share, top_n, top_level, bot_n, bot_level, sky, window, green_view, bed, wood, fixture
+    )
+    if house:
+        return house
     if dark / seen > 0.18 and len(strong) >= 3:
         colors = ", ".join(strong[:4])
         return (
@@ -714,7 +775,7 @@ def _photo_reading(pixels, width, height, texts):
         if banner:
             sentence += f' Visible text reads "{banner}".'
         return sentence
-    if skin_share > 0.06:
+    if 0.04 < skin_share < 0.55:
         worn = _nearest_name(_average(clothing)) if clothing else ""
         pants_rgb = _average(lower) if lower else None
         pants = _nearest_name(pants_rgb) if pants_rgb else ""
