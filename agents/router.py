@@ -2,6 +2,7 @@
 
 import re
 
+from agents.image_agent import explain_saved_image, image_question, interpret_image
 from agents.independent_agent import (
     IndependentAgent,
     arithmetic_reply,
@@ -126,12 +127,28 @@ def _accepted_definition(text, history, independent):
     return f"{word}: {meaning}"
 
 
-def answer_question(message, username=None, history=None, file=None, conversation=None):
+def answer_question(message, username=None, history=None, file=None, conversation=None, previous_image=""):
     """Answer only from local rules, curated knowledge, memory, or indexed books."""
     independent = _independent_agent
     history = history or []
     has_file = bool(file and file.get("data"))
     text = (message or "").strip()
+    if has_file:
+        seen = interpret_image(file, text)
+        if seen:
+            return {
+                "response": _with_name(seen, username),
+                "source": "vision",
+                "provider": "local-pixels",
+                "image_text": _image_lines(seen),
+            }
+    if text and not has_file and previous_image and image_question(text):
+        return {
+            "response": _with_name(explain_saved_image(text, previous_image), username),
+            "source": "vision",
+            "provider": "local-pixels",
+            "image_text": previous_image,
+        }
     research_match = _RESEARCH.match(text) if text and not has_file else None
 
     if text and not has_file:
@@ -305,8 +322,8 @@ def answer_question(message, username=None, history=None, file=None, conversatio
 
     if has_file and not text:
         fallback = (
-            "I can’t interpret this file in offline mode because no local vision "
-            "or document reader is configured."
+            "I can read an uploaded PNG or JPEG image. This file is not one of those, "
+            "so I will not guess what it shows."
         )
         if username:
             fallback = f"{username}, {fallback}"
@@ -420,6 +437,14 @@ def _definition_from_local_or_wikipedia(text, independent, username):
         "source": "knowledge",
         "provider": "wikipedia",
     }
+
+
+def _image_lines(response):
+    return "\n".join(
+        line[2:].strip()
+        for line in str(response or "").splitlines()
+        if line.startswith("• ")
+    )
 
 
 def _with_name(text, username):

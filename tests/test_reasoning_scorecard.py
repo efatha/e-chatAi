@@ -1,5 +1,8 @@
+import base64
+import struct
 import tempfile
 import unittest
+import zlib
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -580,6 +583,41 @@ class ReasoningScorecardTests(unittest.TestCase):
             ),
             [],
         )
+
+    def test_uploaded_image_is_read_from_its_pixels(self):
+        raw = bytearray()
+        for _ in range(4):
+            raw.append(0)
+            raw.extend(b"\xff\x00\x00" * 4)
+        def chunk(kind, data):
+            return (
+                struct.pack(">I", len(data))
+                + kind
+                + data
+                + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
+            )
+        png = b"\x89PNG\r\n\x1a\n"
+        png += chunk(b"IHDR", struct.pack(">IIBBBBB", 4, 4, 8, 2, 0, 0, 0))
+        png += chunk(b"IDAT", zlib.compress(bytes(raw)))
+        png += chunk(b"IEND", b"")
+        with patch.object(router, "_independent_agent", None), patch.object(router, "_book_agent", self.agent):
+            result = router.answer_question(
+                "explain this image",
+                username="John",
+                file={"data": base64.b64encode(png).decode(), "mime_type": "image/png"},
+            )
+        self.assertEqual(result["provider"], "local-pixels")
+        self.assertIn("4 by 4", result["response"])
+        self.assertIn("Scarlet", result["response"])
+        self.assertIn("explain this image", result["response"])
+        self.assertNotIn("couldn’t find enough support", result["response"])
+        follow = router.answer_question(
+            "what is written in that image?",
+            username="John",
+            previous_image="Votre lignée spirituelle\nGuide du superviseur",
+        )
+        self.assertIn("Votre lignée spirituelle", follow["response"])
+        self.assertIn("Guide du superviseur", follow["response"])
 
 
 if __name__ == "__main__":
