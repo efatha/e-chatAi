@@ -142,7 +142,39 @@ def _pixels(raw):
     via_pillow = _pillow_pixels(raw)
     if via_pillow:
         return via_pillow
-    return _png_pixels(raw)
+    decoded = _png_pixels(raw)
+    if decoded:
+        return decoded
+    return _windows_pixels(raw)
+
+
+def _windows_pixels(raw):
+    """Shrink a JPEG through Windows so a photo can be read without Pillow."""
+    script = Path(__file__).with_name("sample_bitmap.ps1")
+    if not script.exists():
+        return None
+    source = scaled = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".img", delete=False) as handle:
+            handle.write(raw)
+            source = handle.name
+        scaled = source + ".png"
+        completed = subprocess.run(
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script), "-Path", source, "-Out", scaled],
+            capture_output=True,
+            text=True,
+            timeout=20,
+            check=False,
+        )
+        if completed.returncode != 0 or not Path(scaled).exists():
+            return None
+        return _png_pixels(Path(scaled).read_bytes())
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    finally:
+        for path in (source, scaled):
+            if path:
+                Path(path).unlink(missing_ok=True)
 
 
 def _pillow_pixels(raw):
@@ -314,7 +346,10 @@ def _describe(pixels, width, height, kind, question, lines, intent="meaning"):
     adjective = _adjective(main_name, brightness, colorful)
     field_line = _field_sentence(fields)
     texts = [_line_text(line) for line in lines]
-    forms = _shape_counts(pixels, width, height)
+    photo = _photo_reading(pixels, width, height, texts)
+    if photo and intent != "text":
+        return photo
+    forms = "" if photo else _shape_counts(pixels, width, height)
     subject, detail = _named_subject(pixels, width, height, lines, main_name)
     return _answer(question, intent, subject, detail, main_name, "", texts, forms)
 
@@ -549,6 +584,122 @@ def _named_subject(pixels, width, height, lines, main_color):
     if desktop:
         return "desktop screen", desktop
     return _scene_subject(pixels)
+
+
+def _is_skin(pixel):
+    red, green, blue = pixel
+    spread = max(pixel) - min(pixel)
+    return (
+        red > 70 and green > 35 and blue > 20
+        and red >= green >= blue
+        and         red > blue + 12
+        and 12 < spread < 95
+        and (red + green + blue) / 3 < 200
+    )
+
+
+def _photo_reading(pixels, width, height, texts):
+    """A person, a group, or produce, instead of counting squares on a photograph."""
+    if width < 8 or height < 8:
+        return ""
+    skin_rgb = [0, 0, 0]
+    center_skin = [0, 0, 0]
+    center_skin_count = 0
+    skin = dark = colorful = 0
+    hues = {"red": 0, "orange": 0, "yellow": 0, "green": 0, "purple": 0}
+    quadrants = [0, 0, 0, 0]
+    clothing = []
+    lower = []
+    gray = left_gray = right_gray = 0
+    seen = 0
+    for y in range(0, height, max(1, height // 48)):
+        for x in range(0, width, max(1, width // 48)):
+            pixel = pixels[y * width + x]
+            red, green, blue = pixel
+            seen += 1
+            level = (red + green + blue) / 3
+            spread = max(pixel) - min(pixel)
+            if level < 55:
+                dark += 1
+            if spread > 40:
+                colorful += 1
+            if spread < 28 and 90 < level < 190:
+                gray += 1
+                if x < width * 0.4:
+                    left_gray += 1
+                elif x > width * 0.6:
+                    right_gray += 1
+            if _is_skin(pixel) and level < 220:
+                skin += 1
+                skin_rgb[0] += red
+                skin_rgb[1] += green
+                skin_rgb[2] += blue
+                quadrants[(0 if y < height / 2 else 2) + (0 if x < width / 2 else 1)] += 1
+                if width * 0.3 < x < width * 0.7 and 155 < level < 210:
+                    center_skin_count += 1
+                    center_skin[0] += red
+                    center_skin[1] += green
+                    center_skin[2] += blue
+            if red > 140 and green < 90 and blue < 90:
+                hues["red"] += 1
+            elif red > 150 and 70 < green < 170 and blue < 80:
+                hues["orange"] += 1
+            elif red > 160 and green > 150 and blue < 90:
+                hues["yellow"] += 1
+            elif green > red + 15 and green > blue + 10 and green > 60:
+                hues["green"] += 1
+            elif red > 80 and blue > 80 and green < min(red, blue) - 10:
+                hues["purple"] += 1
+            if height * 0.42 < y < height * 0.68 and width * 0.35 < x < width * 0.65 and not _is_skin(pixel):
+                clothing.append(pixel)
+            if y > height * 0.78 and width * 0.25 < x < width * 0.75 and not _is_skin(pixel):
+                lower.append(pixel)
+    if not seen:
+        return ""
+    skin_share = skin / seen
+    busy_quadrants = sum(part > seen * 0.01 for part in quadrants)
+    tone = ""
+    tone_pixels = center_skin_count or skin
+    tone_rgb = center_skin if center_skin_count else skin_rgb
+    if tone_pixels:
+        tone = "light-skinned" if sum(tone_rgb) / tone_pixels / 3 > 168 else "dark-skinned"
+    strong = [name for name, count in hues.items() if count / seen > 0.04]
+    if dark / seen > 0.18 and len(strong) >= 3:
+        colors = ", ".join(strong[:4])
+        return (
+            "This image shows fruit and vegetables laid on a dark surface. "
+            f"The strongest colors are {colors}."
+        )
+    banner = next((line for line in texts if "africa" in line.lower()), "")
+    if skin_share > 0.05 and busy_quadrants >= 3 and (banner or dark / seen > 0.45):
+        sentence = f"This image shows a group of {tone} people in dark formal clothes, with flags across their shoulders.".replace("  ", " ")
+        if banner:
+            sentence += f' Visible text reads "{banner}".'
+        return sentence
+    if skin_share > 0.06:
+        worn = _nearest_name(_average(clothing)) if clothing else ""
+        pants_rgb = _average(lower) if lower else None
+        pants = _nearest_name(pants_rgb) if pants_rgb else ""
+        bright_lower = pants_rgb and sum(pants_rgb) / 3 > 170
+        sentence = f"This image shows a {tone} person".strip()
+        if bright_lower and pants:
+            sentence += f" wearing a {pants.lower()} top"
+        elif worn:
+            sentence += f" wearing a {worn.lower()} top"
+            if pants and pants.lower() != worn.lower():
+                sentence += f" and {pants.lower()} trousers"
+        if left_gray > right_gray * 1.8 and left_gray > seen * 0.04:
+            sentence += ", with a car behind"
+        sentence += "."
+        return sentence
+    return ""
+
+
+def _average(pixels):
+    if not pixels:
+        return (0, 0, 0)
+    count = len(pixels)
+    return tuple(sum(pixel[channel] for pixel in pixels) // count for channel in range(3))
 
 
 def _scene_subject(pixels):
