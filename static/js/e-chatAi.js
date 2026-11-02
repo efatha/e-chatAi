@@ -543,5 +543,46 @@ eFile.addEventListener("change", () => {
 migrateOldMemory();
 startNewConversation();
 
+const zoomLayer = document.createElement("div");
+zoomLayer.className = "image-zoom";
+zoomLayer.hidden = true;
+zoomLayer.innerHTML = `
+  <button type="button" class="image-zoom-close" aria-label="Close">×</button>
+  <img class="image-zoom-blur" alt="">
+  <img class="image-zoom-photo" alt="">
+`;
+document.documentElement.appendChild(zoomLayer);
+
+const openImageZoom = (src, alt) => {
+  if (!src) return;
+  zoomLayer.querySelector(".image-zoom-blur").src = src;
+  const photo = zoomLayer.querySelector(".image-zoom-photo");
+  photo.src = src;
+  photo.alt = alt || "Expanded image";
+  zoomLayer.hidden = false;
+};
+
+const closeImageZoom = () => {
+  zoomLayer.hidden = true;
+};
+
+document.addEventListener("click", (event) => {
+  const host = event.target.closest(".creator-photo, .uploaded-image");
+  if (!host) return;
+  const image = host.tagName === "IMG" ? host : host.querySelector("img");
+  if (!image) return;
+  event.preventDefault();
+  openImageZoom(image.currentSrc || image.src, image.alt);
+}, true);
+
+zoomLayer.addEventListener("click", (event) => {
+  if (event.target.classList.contains("image-zoom-photo")) return;
+  closeImageZoom();
+});
+
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") closeImageZoom();
+});
+
 // Tooltip & Emoji Systems remain as defined in your previous version...
 // (Skipped for brevity but should be kept in your actual deployment)

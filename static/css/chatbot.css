@@ -647,6 +647,7 @@ form .echat-controls .icon-container .send-message:hover{
 .uploaded-image {
   display: inline-block;
   position: relative;
+  cursor: zoom-in;
   margin-top: 10px;
   border-radius: 12px;
   overflow: hidden;
@@ -667,8 +668,7 @@ form .echat-controls .icon-container .send-message:hover{
 }
 /* Hover effect */
 .uploaded-image img:hover {
-  transform: scale(1.08); /* Slight zoom for interactivity */
-  filter: brightness(1.1); /* Brightens the image slightly */
+  filter: brightness(1.05);
 }
 /* Loading shimmer effect (optional for images still loading) */
 .uploaded-image::before {
@@ -683,6 +683,7 @@ form .echat-controls .icon-container .send-message:hover{
   background-size: 200% 100%;
   animation: shimmer 1.5s infinite;
   z-index: 1;
+  pointer-events: none;
   opacity: 0; /* Default hidden */
   transition: opacity 0.3s ease;
 }
@@ -1032,6 +1033,61 @@ form.is-recording #message-input {
   object-fit: cover;
   border-radius: 12px;
   margin-bottom: 10px;
+  cursor: zoom-in;
+}
+.uploaded-image img{
+  cursor: zoom-in;
+}
+.image-zoom{
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  z-index: 2147483000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #0c0e12;
+}
+.image-zoom[hidden]{
+  display: none;
+}
+.image-zoom-blur{
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  filter: blur(34px) brightness(0.45);
+  transform: scale(1.15);
+  opacity: 1;
+}
+.image-zoom-photo{
+  position: relative;
+  z-index: 1;
+  max-width: min(880px, 88vw);
+  max-height: 84vh;
+  object-fit: contain;
+  border-radius: 10px;
+  box-shadow: 0 18px 70px rgba(0, 0, 0, 0.45);
+}
+.image-zoom-close{
+  position: absolute;
+  top: 16px;
+  right: 18px;
+  z-index: 2;
+  width: 36px;
+  height: 36px;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.45);
+  color: #fff;
+  font-size: 24px;
+  line-height: 1;
+  cursor: pointer;
 }
 .creator-projects{
   margin-top: 10px;
