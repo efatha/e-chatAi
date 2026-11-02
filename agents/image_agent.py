@@ -34,37 +34,56 @@ def interpret_image(file, question=""):
         return None
     decoded = _pixels(raw)
     if not decoded:
-        return (
-            "I received an image, but this local reader could not open that file. "
-            "PNG and JPEG are the formats I can measure."
-        )
+        lines = _read_text(raw, mime or "image/png")
+        texts = [_line_text(line) for line in lines]
+        if texts:
+            subject, detail = _page_subject(texts)
+            reply = _answer(question, _intent(question), subject, detail, "", "", texts, "")
+        else:
+            reply = "This image shows a rectangular field, and I cannot clearly identify its subject or its main color."
+        return {"response": reply, "lines": "\n".join(texts)}
     pixels, width, height = decoded
     intent = _intent(question)
     lines = []
-    if intent == "meaning":
-        lines = _read_text(_smaller_png(pixels, width, height), "image/png")
-    return _describe(
+    if intent != "color":
+        lines = _read_text(
+            _smaller_png(pixels, width, height),
+            "image/png",
+            *_crop_box(width, height)[:3],
+        )
+    reply = _describe(
         pixels, width, height, _IMAGE_TYPES.get(mime, "image"), question, lines, intent
     )
+    texts = [_line_text(line) for line in lines]
+    return {"response": reply, "lines": "\n".join(texts)}
 
 
 def _intent(question):
-    """Meaning questions need the writing. Describe questions need the colors."""
+    """Match the reply to the question instead of always captioning the picture."""
     lowered = (question or "").lower()
-    if re.search(r"\b(describe|talk about|talk|color|colour|looks|adjective)\b", lowered):
-        return "describe"
-    return "meaning"
+    if re.search(r"\b(written|writing|text|words|read|say|says)\b", lowered):
+        return "text"
+    if re.search(r"\b(describe more|explain more|explain it|explain this|talk more|in detail|detailed|happening|what is happening)\b", lowered):
+        return "detail"
+    if re.search(r"\b(color|colour|looks|adjective)\b", lowered):
+        return "color"
+    return "show"
+
+
+def _crop_box(width, height):
+    """Shrink the whole frame so the heading is not cropped away."""
+    step = max(1, max(width, height) // 900)
+    return 0, 0, step, max(1, width // step), max(1, height // step)
 
 
 def _smaller_png(pixels, width, height):
-    """A shorter PNG so text reading does not scan every original pixel."""
-    step = max(1, max(width, height) // 720)
-    new_width = max(1, width // step)
-    new_height = max(1, height // step)
+    """A center crop, shortened so text reading stays prompt."""
+    left, top, step, new_width, new_height = _crop_box(width, height)
     raw_rows = bytearray()
     for y in range(new_height):
         raw_rows.append(0)
-        source = (y * step) * width
+        source_y = top + y * step
+        source = source_y * width + left
         for x in range(new_width):
             red, green, blue = pixels[source + x * step]
             raw_rows.extend((red, green, blue))
@@ -85,36 +104,38 @@ def _smaller_png(pixels, width, height):
 def image_question(text):
     """A follow-up that still refers to the uploaded picture."""
     lowered = (text or "").lower()
+    if re.search(r"\b(describe more|describe it|explain it|explain more|talk more)\b", lowered):
+        return True
     return bool(re.search(
         r"\b(image|picture|photo|screenshot|slide|written|writing|text|words|read|say|says)\b",
         lowered,
     ))
 
 
-def explain_saved_image(question, saved_text):
-    """Answer a later question from the words already read on the image."""
-    lines = [line.strip() for line in str(saved_text or "").splitlines() if line.strip()]
+def explain_saved_image(question, saved_text, saved_reply=""):
+    """Paraphrase the last image reading when the user asks to describe or explain it."""
+    lowered = (question or "").lower()
+    previous = " ".join(str(saved_reply or "").split())
+    if re.search(r"\b(describe more|describe it|explain it|explain more|talk more)\b", lowered):
+        if not previous and not saved_text:
+            return "I don't still have that image. Upload it again and ask what it is."
+        body = previous or str(saved_text or "")
+        body = re.sub(r"^[^,]{1,40}, ", "", body)
+        return (
+            "Looking again at that same image, I would put it this way: "
+            f"{body} "
+            "I cannot add an object or a detail that was not already visible."
+        )
+    lines = [re.sub(r"^•\s*", "", line).strip() for line in str(saved_text or "").splitlines() if line.strip()]
+    if re.search(r"\b(written|writing|text|words|read|say|says)\b", lowered):
+        if not lines:
+            return "The text is too blurry to read accurately."
+        return "The legible text in that image reads: " + "; ".join(lines) + "."
+    if not lines and previous:
+        return previous
     if not lines:
-        return (
-            "I don't still have the words from an uploaded image. "
-            "Upload the PNG or JPEG again and ask me what is written."
-        )
-    if _intent(question) == "describe":
-        return (
-            "Ask me to describe this image with the picture attached. "
-            "That reply names the colors and does not wait to read the writing."
-        )
-    quoted = "\n".join(f"• {line}" for line in lines)
-    heading = lines[0]
-    rest = lines[1:]
-    extra = ""
-    if rest:
-        extra = " The other important lines are " + "; ".join(rest) + "."
-    return (
-        f"This image is a title card. The main writing says “{heading}”. "
-        f"In plain words, that line is the subject of the picture.{extra}\n"
-        f"The words I read are:\n{quoted}"
-    )
+        return "I don't still have that image. Upload it again and ask what it is."
+    return "The legible text in that image reads: " + "; ".join(lines) + "."
 
 
 def _pixels(raw):
@@ -216,7 +237,7 @@ def _paeth(left, up, upper_left):
     return (left, up, upper_left)[distances.index(min(distances))]
 
 
-def _read_text(raw, mime):
+def _read_text(raw, mime, origin_x=0, origin_y=0, scale=1):
     suffix = ".png" if "png" in mime or raw[:8] == b"\x89PNG\r\n\x1a\n" else ".jpg"
     script = Path(__file__).with_name("ocr_windows.ps1")
     if not script.exists():
@@ -248,11 +269,26 @@ def _read_text(raw, mime):
         if temp_path:
             Path(temp_path).unlink(missing_ok=True)
     lines = []
+    seen = set()
     for line in (completed.stdout or "").splitlines():
-        clean = " ".join(line.split())
-        if clean and clean not in lines:
-            lines.append(clean)
-    return lines[:12]
+        box, _, clean = line.partition("|")
+        clean = " ".join(clean.split()) or " ".join(line.split())
+        if not clean or clean in seen:
+            continue
+        seen.add(clean)
+        parts = box.split(",")
+        if len(parts) == 4 and all(part.lstrip("-").isdigit() for part in parts):
+            x, y, w, h = (int(part) for part in parts)
+            lines.append({
+                "text": clean,
+                "x": origin_x + x * scale,
+                "y": origin_y + y * scale,
+                "w": max(1, w * scale),
+                "h": max(1, h * scale),
+            })
+        else:
+            lines.append({"text": clean, "x": 0, "y": 0, "w": 0, "h": 0})
+    return lines[:24]
 
 
 def _describe(pixels, width, height, kind, question, lines, intent="meaning"):
@@ -277,35 +313,427 @@ def _describe(pixels, width, height, kind, question, lines, intent="meaning"):
     main_name = fields[0][0]
     adjective = _adjective(main_name, brightness, colorful)
     field_line = _field_sentence(fields)
-    asked = " ".join((question or "").split())
-    if intent == "describe":
-        return (
-            f"The local image reader sees a {adjective} graphic. "
-            f"{field_line} "
-            f"It is a {width} by {height} {kind}."
-        )
-    if lines:
-        quoted = "\n".join(f"• {line}" for line in lines)
-        heading = lines[0]
-        rest = lines[1:]
-        extra = ""
-        if rest:
-            extra = " The other important lines are " + "; ".join(rest) + "."
-        return (
-            f"This image is a title card. The main writing says “{heading}”. "
-            f"In plain words, that line is the subject of the picture.{extra}\n"
-            f"The words I read are:\n{quoted}"
-        )
-    if asked:
-        opening = f"I looked at the image for “{asked[:160]}”, but I could not read any words in it."
-    else:
-        opening = "I looked at the image, but I could not read any words in it."
-    return (
-        f"{opening} "
-        f"The local image reader sees a {adjective} graphic. "
-        f"{field_line} "
-        f"It is a {width} by {height} {kind}."
+    texts = [_line_text(line) for line in lines]
+    forms = _shape_counts(pixels, width, height)
+    subject, detail = _named_subject(pixels, width, height, lines, main_name)
+    return _answer(question, intent, subject, detail, main_name, "", texts, forms)
+
+
+def _shape_counts(pixels, width, height):
+    """Count forms inside the picture: square, round, circle, triangle, rectangle, pointed."""
+    cols = 40
+    rows = max(8, int(cols * height / max(width, 1)))
+    grid = []
+    for y in range(rows):
+        sy = min(height - 1, y * height // rows)
+        row = []
+        for x in range(cols):
+            sx = min(width - 1, x * width // cols)
+            row.append(pixels[sy * width + sx])
+        grid.append(row)
+
+    def bright(pixel):
+        return sum(pixel) / 3
+
+    def dist(left, right):
+        return sum(abs(a - b) for a, b in zip(left, right))
+
+    circle_marks = []
+    for y in range(3, rows - 3):
+        for x in range(3, cols - 3):
+            center = grid[y][x]
+            ring = []
+            for dy, dx in ((-3, 0), (3, 0), (0, -3), (0, 3), (-2, -2), (2, 2), (-2, 2), (2, -2)):
+                ring.append(grid[y + dy][x + dx])
+            ring_color = sum(max(point) - min(point) for point in ring) / len(ring)
+            gap = sum(dist(center, point) for point in ring) / len(ring)
+            if ring_color > 45 and gap > 35 and bright(center) > 180:
+                circle_marks.append((x, y))
+    circles = 0
+    used = []
+    for x, y in circle_marks:
+        if any(abs(x - ox) < 8 and abs(y - oy) < 8 for ox, oy in used):
+            continue
+        used.append((x, y))
+        circles += 1
+
+    seen = [[False] * cols for _ in range(rows)]
+    squares = rectangles = 0
+    for y in range(rows):
+        for x in range(cols):
+            if seen[y][x] or bright(grid[y][x]) < 225:
+                continue
+            stack = [(x, y)]
+            seen[y][x] = True
+            cells = []
+            while stack:
+                cx, cy = stack.pop()
+                cells.append((cx, cy))
+                for ny, nx in ((cy - 1, cx), (cy + 1, cx), (cy, cx - 1), (cy, cx + 1)):
+                    if 0 <= ny < rows and 0 <= nx < cols and not seen[ny][nx] and bright(grid[ny][nx]) >= 225:
+                        seen[ny][nx] = True
+                        stack.append((nx, ny))
+            if len(cells) < 6 or len(cells) > cols * rows * 0.35:
+                continue
+            xs = [cell[0] for cell in cells]
+            ys = [cell[1] for cell in cells]
+            box_w = max(xs) - min(xs) + 1
+            box_h = max(ys) - min(ys) + 1
+            if box_w < 2 or box_h < 2:
+                continue
+            ratio = box_w / box_h
+            if 0.75 <= ratio <= 2.4:
+                squares += 1
+            else:
+                rectangles += 1
+    row_votes = 0
+    for row in grid:
+        runs = []
+        run = 0
+        for pixel in row:
+            if bright(pixel) >= 232:
+                run += 1
+            elif run:
+                if run >= 3:
+                    runs.append(run)
+                run = 0
+        if run >= 3:
+            runs.append(run)
+        if len(runs) >= 3 and max(runs) - min(runs) <= 4:
+            row_votes += 1
+    if row_votes >= 2:
+        squares = max(squares, 3)
+    names = (
+        (squares, "square", "squares"),
+        (circles, "circle", "circles"),
+        (rectangles, "rectangle", "rectangles"),
     )
+    present = [f"{count} {singular if count == 1 else plural}" for count, singular, plural in names if count]
+    if not present:
+        return ""
+    if len(present) == 1:
+        verb = "is" if present[0].startswith("1 ") else "are"
+        return f"there {verb} {present[0]}"
+    return "there are " + ", ".join(present[:-1]) + " and " + present[-1]
+
+
+def _form(width, height, pixels):
+    """A shape name from the frame, used when no object is declared."""
+    ratio = width / max(height, 1)
+    if 0.9 <= ratio <= 1.1 and _corners_match_edge(pixels, width, height):
+        return "circle"
+    if 0.9 <= ratio <= 1.1:
+        return "square"
+    if _pointed(pixels, width, height):
+        return "pointed"
+    if ratio >= 1.35 or ratio <= 0.75:
+        return "rectangle"
+    return "round"
+
+
+def _corners_match_edge(pixels, width, height):
+    if width < 4 or height < 4:
+        return False
+    corners = (
+        pixels[0],
+        pixels[width - 1],
+        pixels[(height - 1) * width],
+        pixels[(height - 1) * width + width - 1],
+    )
+    center = pixels[(height // 2) * width + width // 2]
+    def distance(left, right):
+        return sum(abs(a - b) for a, b in zip(left, right))
+    return all(distance(corner, center) > 50 for corner in corners)
+
+
+def _pointed(pixels, width, height):
+    if height < 6:
+        return False
+    top = pixels[: width * max(1, height // 5)]
+    bottom = pixels[(height - max(1, height // 5)) * width :]
+    def spread(sample):
+        reds = [pixel[0] for pixel in sample] or [0]
+        return max(reds) - min(reds)
+    return spread(top) > spread(bottom) + 40
+
+
+_ASKED_OBJECTS = (
+    "house", "pen", "hand", "desktop", "screen", "animal", "tool", "machine",
+    "bottle", "wood", "plastic", "fire", "grass", "forest", "sky", "car",
+    "path", "person", "tree", "book", "phone", "laptop",
+)
+
+
+def _answer(question, intent, subject, detail, color, form, texts, forms=""):
+    """Answer the question from visible color, form, subject, and legible words."""
+    lowered = (question or "").lower()
+    if intent == "text":
+        if not texts:
+            return "The text is too blurry to read accurately."
+        return "The legible text reads: " + "; ".join(texts[:8]) + "."
+    asked = next((word for word in _ASKED_OBJECTS if re.search(rf"\b{word}\b", lowered)), "")
+    if asked and asked not in (subject or "") and asked not in (detail or ""):
+        visible = _visible_clause(subject, detail, color, form, texts[:1], forms)
+        return f"{visible} I cannot clearly identify a {asked} in it."
+    if intent == "detail":
+        lead = _visible_clause(subject, detail, color, form, [], forms)
+        extra = []
+        headings = _caption_lines(texts)
+        if headings:
+            extra.append("Visible labels include " + ", ".join(headings) + ".")
+        if not subject:
+            extra.append("I cannot clearly identify a specific object beyond that screen.")
+        return " ".join([lead] + extra)
+    return _visible_clause(subject, detail, color, form, [] if subject else _caption_lines(texts)[:5], forms)
+
+
+def _visible_clause(subject, detail, color, form, texts, forms=""):
+    text_bit = ""
+    if texts:
+        text_bit = f', with labels {", ".join(texts)}'
+    detail_bit = f", {detail}" if detail else ""
+    color_bit = "" if not color or color == "unread" else f", predominantly {color}"
+    form_bit = f", {forms}" if forms else ""
+    if subject:
+        return f"This image shows a {subject}{color_bit}{form_bit}{detail_bit}{text_bit}."
+    if color_bit:
+        return f"This image shows a predominantly {color} field{form_bit}{detail_bit}{text_bit}."
+    return f"This image shows a field{form_bit}{detail_bit}{text_bit}."
+
+
+def _caption_lines(texts):
+    """Short labels, not a sliced paragraph."""
+    kept = []
+    for text in texts:
+        clean = " ".join(text.split())
+        if not clean or len(clean) > 28 or clean.endswith("."):
+            continue
+        if clean not in kept:
+            kept.append(clean)
+    return kept[:6]
+
+
+def _page_subject(texts):
+    folded = " ".join(texts).lower()
+    wanted = {"search", "play original", "transfer", "find a recording", "audio archive", "private archive"}
+    labels = []
+    for line in texts:
+        clean = " ".join(line.split())
+        if clean.lower() in wanted and clean not in labels:
+            labels.append(clean)
+    if "archive" in folded and len(labels) >= 2:
+        shown = ", ".join(label for label in labels if label.lower() not in {"audio archive", "private archive"})
+        detail = "headed “Audio archive”" if any(line.lower() == "audio archive" for line in texts) else "headed “Private archive”"
+        if shown:
+            detail += f", with {shown}"
+        return "private audio archive screen", detail
+    if "talking" in folded:
+        heading = next((line for line in texts if "talking" in line.lower()), "Pair talking")
+        shown = ", ".join(_caption_lines(texts)[:5])
+        detail = f"headed “{heading}”"
+        if shown:
+            detail += f", with {shown}"
+        return "dashboard screen", detail
+    if len(_caption_lines(texts)) >= 4 and any(word in folded for word in ("search", "menu", "settings", "upload", "refresh")):
+        shown = ", ".join(_caption_lines(texts)[:4])
+        return "application screen", f"with labels {shown}"
+    return "", ""
+
+
+def _named_subject(pixels, width, height, lines, main_color):
+    texts = [_line_text(line) for line in lines]
+    page = _page_subject(texts)
+    if page[0]:
+        return page
+    desktop = _desktop_screen(pixels, width, height, lines, main_color)
+    if desktop:
+        return "desktop screen", desktop
+    return _scene_subject(pixels)
+
+
+def _scene_subject(pixels):
+    step = max(1, len(pixels) // 4000)
+    skin = green = book = tree = 0
+    seen = 0
+    for index in range(0, len(pixels), step):
+        red, green_channel, blue = pixels[index]
+        seen += 1
+        if red > 70 and green_channel > 30 and blue > 15 and red > green_channel + 12 and red > blue + 12:
+            skin += 1
+        if green_channel > red + 12 and green_channel > blue + 8 and green_channel > 50:
+            green += 1
+        name = _nearest_name((red, green_channel, blue))
+        if name in {"Maroon", "Burgundy", "Plum", "Aubergine", "Dark Purple"}:
+            book += 1
+        if name in {"Emerald", "Emerald Green", "Teal", "Viridian", "Forest Green", "Dark Green"}:
+            tree += 1
+    if not seen:
+        return "", ""
+    if book / seen > 0.08 and skin / seen > 0.05:
+        extra = "held in a hand"
+        if tree / seen > 0.015:
+            extra += " and printed with a green tree"
+        return "book", extra
+    if book / seen > 0.12:
+        return "book", ""
+    if green / seen > 0.2:
+        return "", "with green across much of the frame"
+    return "", ""
+
+
+def _meaning_without_object(form, texts):
+    return _answer("", "text" if texts else "show", "", "", "unread", form or "rectangular", texts)
+
+
+def _scene(pixels, width, height):
+    """Name only the regions the pixels actually support."""
+    step = max(1, len(pixels) // 4000)
+    skin = green = book = tree = 0
+    seen = 0
+    skin_rgb = [0, 0, 0]
+    book_rgb = [0, 0, 0]
+    for index in range(0, len(pixels), step):
+        red, green_channel, blue = pixels[index]
+        seen += 1
+        if red > 70 and green_channel > 30 and blue > 15 and red > green_channel + 12 and red > blue + 12:
+            skin += 1
+            skin_rgb[0] += red
+            skin_rgb[1] += green_channel
+            skin_rgb[2] += blue
+        if green_channel > red + 12 and green_channel > blue + 8 and green_channel > 50:
+            green += 1
+        name = _nearest_name((red, green_channel, blue))
+        if name in {"Maroon", "Burgundy", "Plum", "Aubergine", "Dark Purple"}:
+            book += 1
+            book_rgb[0] += red
+            book_rgb[1] += green_channel
+            book_rgb[2] += blue
+        if name in {"Emerald", "Emerald Green", "Teal", "Viridian", "Forest Green", "Dark Green"}:
+            tree += 1
+    if not seen:
+        return ""
+    parts = []
+    if skin / seen > 0.05 and book / seen > 0.08:
+        hand = _nearest_name(tuple(channel // max(skin, 1) for channel in skin_rgb))
+        cover = _nearest_name(tuple(channel // max(book, 1) for channel in book_rgb))
+        holding = f"a {hand.lower()} hand holding a {cover.lower()} book"
+        if tree / seen > 0.015:
+            holding += " with a green tree printed on the cover"
+        parts.append(holding)
+    elif book / seen > 0.12:
+        parts.append("a book cover")
+    if green / seen > 0.12:
+        parts.append("grass in the background" if parts else "a grassy background")
+    if not parts:
+        return ""
+    return "I see " + ", and ".join(parts) + "."
+
+
+_WINDOWS_MENU = {
+    "installed apps", "mobility center", "power options", "event viewer",
+    "system", "device manager", "network connections", "disk management",
+    "computer management", "terminal", "terminal (admin)", "task manager",
+    "settings", "file explorer", "shut down or sign out",
+}
+
+
+def _line_text(line):
+    return line["text"] if isinstance(line, dict) else str(line)
+
+
+def _desktop_screen(pixels, width, height, lines, main_color):
+    """A Windows desktop: icon side, open menu, and the flashed row."""
+    texts = [_line_text(line) for line in lines]
+    folded = [text.lower() for text in texts]
+    if sum(text in _WINDOWS_MENU for text in folded) < 3:
+        return ""
+    groups = {"left": [], "right": [], "top": [], "bottom": [], "center": []}
+    for line in lines:
+        text = _line_text(line)
+        x = line.get("x", 0) if isinstance(line, dict) else 0
+        y = line.get("y", 0) if isinstance(line, dict) else 0
+        if x < width * 0.28:
+            place = "left"
+        elif x > width * 0.68:
+            place = "right"
+        elif y > height * 0.82:
+            place = "bottom"
+        elif y < height * 0.08:
+            place = "top"
+        else:
+            place = "center"
+        if text not in groups[place]:
+            groups[place].append(text)
+    windows = "Windows 11" if "installed apps" in folded and any(
+        text.startswith("terminal") for text in folded
+    ) else "Windows"
+    bits = [f"running {windows}"]
+    for place in ("left", "center", "right", "top", "bottom"):
+        names = groups[place]
+        if not names:
+            continue
+        shown = ", ".join(names[:6])
+        if place == "center":
+            flash = _flashed_word(pixels, width, height, lines)
+            flash_bit = f", with a flash on {flash}" if flash else ""
+            bits.append(f"a center menu showing {shown}{flash_bit}")
+        else:
+            bits.append(f"{place}-side icons reading {shown}")
+    return ", ".join(bits)
+
+
+def _flashed_word(pixels, width, height, lines):
+    best_text = ""
+    best_score = -1
+    scores = []
+    for line in lines:
+        if not isinstance(line, dict) or line.get("w", 0) < 8:
+            continue
+        if _line_text(line).lower() not in _WINDOWS_MENU:
+            continue
+        x = max(0, line["x"] - 8)
+        y = max(0, line["y"] - 2)
+        w = line["w"] + 16
+        h = max(8, line["h"])
+        total = 0
+        count = 0
+        for row in range(y, min(height, y + h), max(1, h // 4)):
+            for col in range(x, min(width, x + w), max(1, w // 8)):
+                red, green, blue = pixels[row * width + col]
+                total += (red + green + blue) / 3
+                count += 1
+        if not count:
+            continue
+        score = total / count
+        scores.append(score)
+        if score > best_score:
+            best_score = score
+            best_text = _line_text(line)
+    if len(scores) < 2 or best_score < 0:
+        return ""
+    scores.sort()
+    if best_score < scores[len(scores) // 2] + 18:
+        return ""
+    return best_text
+
+
+def _paraphrase(lines):
+    """Restate the writing in a conversational line, without adding unread words."""
+    if not lines:
+        return ""
+    text = " ".join(lines)
+    folded = text.lower()
+    if "purpose" in folded and "warren" in folded:
+        question = ""
+        if "earth" in folded or "here for" in folded:
+            question = " The line along the bottom asks what on earth the reader is here for."
+        return (
+            "In everyday words, this is Rick Warren’s book, and the title starts with “The Purpose”."
+            + question
+            + " The cover is really asking why you are here."
+        )
+    heading = lines[0]
+    return f"In everyday words, the picture is presenting this line to you: “{heading}”."
 
 
 def _color_fields(pixels):

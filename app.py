@@ -124,9 +124,12 @@ def _chat_turn():
             file=file,
             conversation=conversation,
             previous_image=session.get("image_text") or "",
+            previous_reply=session.get("image_reply") or "",
         )
-        if result.get("image_text"):
-            session["image_text"] = result["image_text"]
+        if "image_text" in result:
+            session["image_text"] = result.get("image_text") or ""
+        if result.get("image_reply"):
+            session["image_reply"] = result["image_reply"]
     if result.get("response"):
         memory.add(conversation_id, "assistant", result["response"])
     return jsonify(result)

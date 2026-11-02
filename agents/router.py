@@ -127,7 +127,10 @@ def _accepted_definition(text, history, independent):
     return f"{word}: {meaning}"
 
 
-def answer_question(message, username=None, history=None, file=None, conversation=None, previous_image=""):
+def answer_question(
+    message, username=None, history=None, file=None, conversation=None,
+    previous_image="", previous_reply="",
+):
     """Answer only from local rules, curated knowledge, memory, or indexed books."""
     independent = _independent_agent
     history = history or []
@@ -135,19 +138,25 @@ def answer_question(message, username=None, history=None, file=None, conversatio
     text = (message or "").strip()
     if has_file:
         seen = interpret_image(file, text)
-        if seen:
+        if isinstance(seen, dict) and seen.get("response"):
+            body = seen["response"]
             return {
-                "response": _with_name(seen, username),
+                "response": _with_name(body, username),
                 "source": "vision",
                 "provider": "local-pixels",
-                "image_text": _image_lines(seen),
+                "image_text": seen.get("lines") or "",
+                "image_reply": body,
             }
-    if text and not has_file and previous_image and image_question(text):
+    if text and not has_file and image_question(text) and (previous_image or previous_reply):
         return {
-            "response": _with_name(explain_saved_image(text, previous_image), username),
+            "response": _with_name(
+                explain_saved_image(text, previous_image, previous_reply),
+                username,
+            ),
             "source": "vision",
             "provider": "local-pixels",
             "image_text": previous_image,
+            "image_reply": previous_reply,
         }
     research_match = _RESEARCH.match(text) if text and not has_file else None
 

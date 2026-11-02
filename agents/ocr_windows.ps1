@@ -18,4 +18,7 @@ $bitmap = Await ($decoder.GetSoftwareBitmapAsync()) ([Windows.Graphics.Imaging.S
 $engine = [Windows.Media.Ocr.OcrEngine]::TryCreateFromUserProfileLanguages()
 if (-not $engine) { return }
 $result = Await ($engine.RecognizeAsync($bitmap)) ([Windows.Media.Ocr.OcrResult])
-foreach ($line in $result.Lines) { $line.Text }
+foreach ($line in $result.Lines) {
+  $box = $line.BoundingRect
+  "{0},{1},{2},{3}|{4}" -f [int]$box.X, [int]$box.Y, [int]$box.Width, [int]$box.Height, $line.Text
+}

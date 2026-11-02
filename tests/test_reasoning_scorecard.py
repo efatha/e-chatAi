@@ -607,9 +607,7 @@ class ReasoningScorecardTests(unittest.TestCase):
                 file={"data": base64.b64encode(png).decode(), "mime_type": "image/png"},
             )
         self.assertEqual(result["provider"], "local-pixels")
-        self.assertIn("4 by 4", result["response"])
         self.assertIn("Scarlet", result["response"])
-        self.assertIn("explain this image", result["response"])
         self.assertNotIn("couldn’t find enough support", result["response"])
         follow = router.answer_question(
             "what is written in that image?",
@@ -617,6 +615,13 @@ class ReasoningScorecardTests(unittest.TestCase):
             previous_image="Votre lignée spirituelle\nGuide du superviseur",
         )
         self.assertIn("Votre lignée spirituelle", follow["response"])
+        more = router.answer_question(
+            "describe more",
+            username="John",
+            previous_reply="The form is a rectangle. The main field is Navy Blue.",
+        )
+        self.assertIn("put it this way", more["response"])
+        self.assertNotIn("could not open that file", more["response"])
         self.assertIn("Guide du superviseur", follow["response"])
 
 
