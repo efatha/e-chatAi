@@ -1115,7 +1115,7 @@ def _weather_card(place):
                 "timezone": place["timezone"],
                 "current": "temperature_2m,relative_humidity_2m,weather_code",
                 "hourly": "temperature_2m,precipitation_probability,weather_code",
-                "daily": "temperature_2m_max,temperature_2m_min",
+                "daily": "temperature_2m_max,temperature_2m_min,sunrise,sunset",
                 "forecast_hours": 8,
             },
             headers={"User-Agent": WIKI_USER_AGENT},
@@ -1133,8 +1133,8 @@ def _weather_card(place):
     when = current.get("time") or ""
     stamp = _weather_stamp(when, payload.get("utc_offset_seconds") or 0)
     code = int(current.get("weather_code") or 0)
-    condition, icon = _WEATHER_CODE.get(code, ("Mixed", "cloud"))
-    hours = _weather_hours(hourly, when)
+    condition, icon = _sky_at(_WEATHER_CODE.get(code, ("Mixed", "cloud")), when, daily)
+    hours = _weather_hours(hourly, when, daily)
     humidity = current.get("relative_humidity_2m")
     rain = hours[0]["rain"] if hours else None
     highs = (daily.get("temperature_2m_max") or [None])[0]
@@ -1155,6 +1155,40 @@ def _weather_card(place):
     }
 
 
+def _sky_at(named, when, daily):
+    condition, icon = named
+    try:
+        moment = datetime.fromisoformat(when)
+    except ValueError:
+        return condition, icon
+    if not _is_night(moment, daily or {}):
+        return condition, icon
+    if condition == "Sunny":
+        condition = "Clear"
+    elif condition == "Mostly sunny":
+        condition = "Mostly clear"
+    if icon == "sun":
+        icon = "moon"
+    return condition, icon
+
+
+def _is_night(moment, daily):
+    day = moment.date().isoformat()
+    dates = daily.get("time") or []
+    rises = daily.get("sunrise") or []
+    sets = daily.get("sunset") or []
+    for index, stamp in enumerate(dates):
+        if str(stamp)[:10] != day:
+            continue
+        try:
+            rise = datetime.fromisoformat(rises[index])
+            sunset = datetime.fromisoformat(sets[index])
+        except (IndexError, ValueError, TypeError):
+            break
+        return moment < rise or moment >= sunset
+    return moment.hour >= 19 or moment.hour < 6
+
+
 def _weather_stamp(value, offset_seconds=0):
     try:
         moment = datetime.fromisoformat(value)
@@ -1171,7 +1205,7 @@ def _weather_stamp(value, offset_seconds=0):
     }
 
 
-def _weather_hours(hourly, current_time):
+def _weather_hours(hourly, current_time, daily):
     times = hourly.get("time") or []
     temps = hourly.get("temperature_2m") or []
     rains = hourly.get("precipitation_probability") or []
@@ -1188,9 +1222,11 @@ def _weather_hours(hourly, current_time):
         except ValueError:
             label = ""
         code = int(codes[index] or 0) if index < len(codes) else 0
-        _condition, icon = _WEATHER_CODE.get(code, ("Mixed", "cloud"))
-        if icon == "sun" and "PM" in label and int(label.split()[0] or 0) >= 7:
-            icon = "moon"
+        condition, icon = _sky_at(
+            _WEATHER_CODE.get(code, ("Mixed", "cloud")),
+            times[index],
+            daily,
+        )
         rows.append({
             "time": label,
             "temperature": None if index >= len(temps) or temps[index] is None else round(temps[index]),
