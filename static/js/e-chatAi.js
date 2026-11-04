@@ -156,6 +156,50 @@ const deleteConversation = (conversationId) => {
   renderMemoryLinks(memorySearch.value);
 };
 
+const weatherIcon = (kind) => {
+  const icons = {
+    sun: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4" fill="#f5c542"/><g stroke="#f5c542" stroke-width="2" stroke-linecap="round"><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M19.1 4.9 17 7M7 17l-2.1 2.1"/></g></svg>',
+    moon: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="#8eb6ff" d="M15 3a8 8 0 1 0 6 13 7 7 0 1 1-6-13z"/></svg>',
+    cloud: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="#c5ccd4" d="M7 18h10a4 4 0 0 0 .4-8 6 6 0 0 0-11.5-1.5A3.5 3.5 0 0 0 7 18z"/></svg>',
+    rain: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="#c5ccd4" d="M7 14h10a4 4 0 0 0 .4-8 6 6 0 0 0-11.5-1.5A3.5 3.5 0 0 0 7 14z"/><path stroke="#6aa7ff" stroke-width="2" stroke-linecap="round" d="M8 17l-1 3M12 17l-1 3M16 17l-1 3"/></svg>',
+    snow: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="#e8eef5" d="M12 2l1.2 4.2L17 7l-3.8.8L12 12l-1.2-4.2L7 7l3.8-.8zM6 14l.8 2.2L9 17l-2.2.8L6 20l-.8-2.2L3 17l2.2-.8zM18 14l.8 2.2L21 17l-2.2.8L18 20l-.8-2.2L15 17l2.2-.8z"/></svg>',
+    storm: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="#9aa3ad" d="M7 13h10a4 4 0 0 0 .4-8 6 6 0 0 0-11.5-1.5A3.5 3.5 0 0 0 7 13z"/><path fill="#f5c542" d="M13 12l-4 6h3l-1 4 5-7h-3z"/></svg>',
+    fog: '<svg viewBox="0 0 24 24" aria-hidden="true"><path stroke="#c5c8ce" stroke-width="2" stroke-linecap="round" d="M4 9h16M3 13h18M5 17h14"/></svg>'
+  };
+  return icons[kind] || icons.cloud;
+};
+
+const renderWeather = (card) => {
+  const root = document.createElement("div");
+  root.className = "weather-card";
+  const degree = (value) => (value == null ? "—" : `${value}°C`);
+  const hours = (card.hours || []).map((hour) => `
+    <div class="weather-hour">
+      <span>${escapeHtml(hour.time || "")}</span>
+      ${weatherIcon(hour.icon)}
+      <strong>${hour.rain == null ? "" : `${hour.rain}%`}</strong>
+      <b>${hour.temperature == null ? "" : `${hour.temperature}°`}</b>
+    </div>`).join("");
+  root.innerHTML = `
+    <div class="weather-top">
+      <div>
+        <p class="weather-temp">${degree(card.temperature)}</p>
+        <p class="weather-condition">${escapeHtml(card.condition || "")}</p>
+        <p class="weather-where">${escapeHtml(card.place || "")}${card.clock ? ` · ${escapeHtml(card.clock)}` : ""}</p>
+      </div>
+      <div class="weather-mark">${weatherIcon(card.icon)}</div>
+    </div>
+    <div class="weather-facts">
+      <p><span>Today's high</span><strong>${degree(card.high)}</strong></p>
+      <p><span>Tonight's low</span><strong>${degree(card.low)}</strong></p>
+      <p><span>Rain chance now${card.clock ? ` (${escapeHtml(card.clock)})` : ""}</span><strong>${card.rain == null ? "—" : `${card.rain}%`}</strong></p>
+      <p><span>Humidity</span><strong>${escapeHtml(card.humidity || "—")}</strong></p>
+    </div>
+    <div class="weather-hours">${hours}</div>
+    <p class="weather-source">e-chat</p>`;
+  return root;
+};
+
 const renderStoredMessage = (item) => {
   if (!item || !["user", "assistant"].includes(item.role)) return;
   const classes = item.role === "user" ? "user-message" : "bot-message";
@@ -166,6 +210,7 @@ const renderStoredMessage = (item) => {
     `${avatar}<div class="message-text">${escapeHtml(String(item.content || "")).replace(/\n/g, "<br>")}</div>`,
     classes
   );
+  if (item.weather) element.appendChild(renderWeather(item.weather));
   eChatBody.insertBefore(element, eChatBody.querySelector(".echat-footer"));
 };
 
@@ -206,13 +251,14 @@ const ensureConversation = (firstMessage) => {
   return thread;
 };
 
-const addThreadMessage = (conversationId, role, content, dictionary) => {
+const addThreadMessage = (conversationId, role, content, dictionary, weather) => {
   const threads = readThreads();
   const index = threads.findIndex((thread) => thread.id === conversationId);
   if (index < 0) return;
   threads[index].messages = Array.isArray(threads[index].messages) ? threads[index].messages : [];
   const message = { role, content, created_at: new Date().toISOString() };
   if (dictionary) message.dictionary = dictionary;
+  if (weather) message.weather = weather;
   threads[index].messages.push(message);
   threads[index].updatedAt = new Date().toISOString();
   const [updated] = threads.splice(index, 1);
@@ -426,6 +472,10 @@ const generateEchatResponse = async (incomingMsgDiv, conversationId, sentMessage
           msgElement.style.color = "#fff8f2";
         }
       }
+      if (data.weather) {
+        msgElement.classList.add("weather-bubble");
+        msgElement.appendChild(renderWeather(data.weather));
+      }
       if (data.commons && data.commons.thumbnail) {
         const figure = document.createElement("figure");
         figure.className = "commons-photo";
@@ -487,7 +537,7 @@ const generateEchatResponse = async (incomingMsgDiv, conversationId, sentMessage
         if (asks.childElementCount) msgElement.appendChild(asks);
       }
       finishMessage(incomingMsgDiv);
-      addThreadMessage(conversationId, "assistant", data.response, data.dictionary);
+      addThreadMessage(conversationId, "assistant", data.response, data.dictionary, data.weather);
       return;
     }
     throw new Error(data.error || "Backend returned no answer.");

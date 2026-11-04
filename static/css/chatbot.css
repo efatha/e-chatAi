@@ -454,6 +454,97 @@ body{
   letter-spacing: 0.04em;
   text-transform: lowercase;
 }
+.chat-body .message .message-text.weather-bubble {
+  width: min(480px, calc(100% - 70px));
+  max-width: min(480px, calc(100% - 70px));
+  box-sizing: border-box;
+  background: #0e0e10;
+  color: #f4f4f5;
+}
+.weather-card {
+  margin-top: 12px;
+  padding-top: 4px;
+  color: #f4f4f5;
+}
+.weather-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+.weather-temp {
+  margin: 0;
+  font-size: 2.4rem;
+  font-weight: 650;
+  line-height: 1;
+}
+.weather-condition {
+  margin: 6px 0 0;
+  font-size: 1.05rem;
+  font-weight: 700;
+}
+.weather-where {
+  margin: 4px 0 0;
+  color: #bdbdc2;
+  font-size: 0.86rem;
+}
+.weather-mark {
+  width: 54px;
+  height: 54px;
+  flex: 0 0 54px;
+}
+.weather-mark svg,
+.weather-hour svg {
+  width: 100%;
+  height: 28px;
+  display: block;
+}
+.weather-mark svg {
+  height: 54px;
+}
+.weather-facts {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px 18px;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+}
+.weather-facts p {
+  margin: 0;
+}
+.weather-facts span {
+  display: block;
+  color: #bdbdc2;
+  font-size: 0.82rem;
+}
+.weather-facts strong {
+  display: block;
+  margin-top: 2px;
+  font-size: 1.15rem;
+}
+.weather-hours {
+  display: flex;
+  gap: 8px;
+  margin-top: 14px;
+  overflow-x: auto;
+}
+.weather-hour {
+  min-width: 58px;
+  text-align: center;
+  font-size: 0.78rem;
+  color: #d7d7dc;
+}
+.weather-hour strong,
+.weather-hour b {
+  display: block;
+  font-weight: 650;
+}
+.weather-source {
+  margin: 10px 0 0;
+  color: #8d8d93;
+  font-size: 0.75rem;
+}
 .commons-photo {
   margin: 10px 0 0;
   max-width: 320px;

@@ -9,7 +9,7 @@ import logging
 import os
 import random
 import re
-from datetime import date
+from datetime import date, datetime
 
 import requests
 
@@ -975,6 +975,195 @@ def _meta_text(meta, key):
     return text[:180]
 
 
+_WEATHER = re.compile(
+    r"(?:how(?:'s| is)\s+)?(?:what(?:'s| is)\s+)?(?:the\s+)?"
+    r"(?:current\s+|today'?s\s+)?(?:weather|temperature|forecast|meteo)"
+    r"(?:\s+now|\s+today|\s+like)?\s+(?:in|at|for|of)\s+(.+?)"
+    r"(?:\s+now|\s+today|\s+right\s+now)?\s*[?.!]*$",
+    re.IGNORECASE,
+)
+_WEATHER_CODE = {
+    0: ("Sunny", "sun"),
+    1: ("Mostly sunny", "sun"),
+    2: ("Partly cloudy", "cloud"),
+    3: ("Overcast", "cloud"),
+    45: ("Foggy", "fog"),
+    48: ("Foggy", "fog"),
+    51: ("Light drizzle", "rain"),
+    53: ("Drizzle", "rain"),
+    55: ("Heavy drizzle", "rain"),
+    61: ("Light rain", "rain"),
+    63: ("Rain", "rain"),
+    65: ("Heavy rain", "rain"),
+    71: ("Light snow", "snow"),
+    73: ("Snow", "snow"),
+    75: ("Heavy snow", "snow"),
+    80: ("Rain showers", "rain"),
+    81: ("Rain showers", "rain"),
+    82: ("Heavy showers", "rain"),
+    95: ("Thunderstorm", "storm"),
+    96: ("Thunderstorm", "storm"),
+    99: ("Thunderstorm", "storm"),
+}
+
+
+def weather_reply(message):
+    """Today's weather for a city, from Open-Meteo. No account and no fee."""
+    match = _WEATHER.match((message or "").strip())
+    if not match:
+        return None
+    place = re.sub(r"\s+", " ", match.group(1)).strip(" .,")
+    if not place:
+        return None
+    found = _weather_place(place)
+    if not found:
+        return {
+            "text": f"I couldn't find a city called {place}.",
+            "card": None,
+        }
+    card = _weather_card(found)
+    if not card:
+        return {
+            "text": f"I couldn't read the weather for {found['label']} just now.",
+            "card": None,
+        }
+    return {
+        "text": (
+            f"{card['place']} is {card['temperature']}°C and {card['condition'].lower()} "
+            f"right now, {card['date']} at {card['clock']}."
+        ),
+        "card": card,
+    }
+
+
+def _weather_place(name):
+    try:
+        response = requests.get(
+            "https://geocoding-api.open-meteo.com/v1/search",
+            params={"name": name, "count": 1, "language": "en", "format": "json"},
+            headers={"User-Agent": WIKI_USER_AGENT},
+            timeout=12,
+        )
+        response.raise_for_status()
+        hits = (response.json() or {}).get("results") or []
+    except (requests.RequestException, ValueError):
+        return None
+    if not hits:
+        return None
+    hit = hits[0]
+    label = hit.get("name") or name
+    if hit.get("country"):
+        label = f"{label}, {hit['country']}"
+    return {
+        "label": label,
+        "latitude": hit.get("latitude"),
+        "longitude": hit.get("longitude"),
+        "timezone": hit.get("timezone") or "auto",
+    }
+
+
+def _weather_card(place):
+    try:
+        response = requests.get(
+            "https://api.open-meteo.com/v1/forecast",
+            params={
+                "latitude": place["latitude"],
+                "longitude": place["longitude"],
+                "timezone": place["timezone"],
+                "current": "temperature_2m,relative_humidity_2m,weather_code",
+                "hourly": "temperature_2m,precipitation_probability,weather_code",
+                "daily": "temperature_2m_max,temperature_2m_min",
+                "forecast_hours": 8,
+            },
+            headers={"User-Agent": WIKI_USER_AGENT},
+            timeout=12,
+        )
+        response.raise_for_status()
+        payload = response.json() or {}
+    except (requests.RequestException, ValueError):
+        return None
+    current = payload.get("current") or {}
+    hourly = payload.get("hourly") or {}
+    daily = payload.get("daily") or {}
+    if current.get("temperature_2m") is None:
+        return None
+    when = current.get("time") or ""
+    stamp = _weather_stamp(when)
+    code = int(current.get("weather_code") or 0)
+    condition, icon = _WEATHER_CODE.get(code, ("Mixed", "cloud"))
+    hours = _weather_hours(hourly, when)
+    humidity = current.get("relative_humidity_2m")
+    rain = hours[0]["rain"] if hours else None
+    highs = (daily.get("temperature_2m_max") or [None])[0]
+    lows = (daily.get("temperature_2m_min") or [None])[0]
+    return {
+        "place": place["label"],
+        "date": stamp["date"],
+        "clock": stamp["clock"],
+        "temperature": round(current["temperature_2m"]),
+        "condition": condition,
+        "icon": icon,
+        "high": None if highs is None else round(highs),
+        "low": None if lows is None else round(lows),
+        "rain": rain,
+        "humidity": _humidity_word(humidity),
+        "hours": hours[:6],
+    }
+
+
+def _weather_stamp(value):
+    try:
+        moment = datetime.fromisoformat(value)
+    except ValueError:
+        return {"date": "", "clock": ""}
+    hour = moment.strftime("%I").lstrip("0") or "12"
+    return {
+        "date": moment.strftime("%A, %-d %B %Y") if os.name != "nt" else moment.strftime("%A, %#d %B %Y"),
+        "clock": f"{hour}:{moment.strftime('%M')} {moment.strftime('%p')}",
+    }
+
+
+def _weather_hours(hourly, current_time):
+    times = hourly.get("time") or []
+    temps = hourly.get("temperature_2m") or []
+    rains = hourly.get("precipitation_probability") or []
+    codes = hourly.get("weather_code") or []
+    start = 0
+    if current_time in times:
+        start = times.index(current_time)
+    rows = []
+    for index in range(start, min(start + 6, len(times))):
+        try:
+            moment = datetime.fromisoformat(times[index])
+            hour = moment.strftime("%I").lstrip("0") or "12"
+            label = f"{hour} {moment.strftime('%p')}"
+        except ValueError:
+            label = ""
+        code = int(codes[index] or 0) if index < len(codes) else 0
+        _condition, icon = _WEATHER_CODE.get(code, ("Mixed", "cloud"))
+        if icon == "sun" and "PM" in label and int(label.split()[0] or 0) >= 7:
+            icon = "moon"
+        rows.append({
+            "time": label,
+            "temperature": None if index >= len(temps) or temps[index] is None else round(temps[index]),
+            "rain": None if index >= len(rains) or rains[index] is None else round(rains[index]),
+            "icon": icon,
+        })
+    return rows
+
+
+def _humidity_word(value):
+    if value is None:
+        return ""
+    if value < 40:
+        return "Dry"
+    if value < 60:
+        return "Mild"
+    if value < 80:
+        return "Humid"
+    return "Very humid"
+
+
 def wikipedia_definition(term, question=""):
     """Wikipedia article text, with a plain dictionary line for one word."""
     subject = (term or "").strip()
@@ -1111,10 +1300,9 @@ def _wikipedia_plain_summary(title):
         extract = (payload.get("extract") or "").strip()
         return extract or None
     extract = re.sub(r"\s+", " ", payload.get("extract") or "").strip()
-    page_title = payload.get("title") or title
     if len(extract) < 40:
         return None
-    return f"Wikipedia — {page_title}\n{_trim(extract, 700)}"
+    return f"- {_trim(extract, 700)}"
 
 
 def word_reference(word):
