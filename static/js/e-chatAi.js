@@ -206,12 +206,14 @@ const ensureConversation = (firstMessage) => {
   return thread;
 };
 
-const addThreadMessage = (conversationId, role, content) => {
+const addThreadMessage = (conversationId, role, content, dictionary) => {
   const threads = readThreads();
   const index = threads.findIndex((thread) => thread.id === conversationId);
   if (index < 0) return;
   threads[index].messages = Array.isArray(threads[index].messages) ? threads[index].messages : [];
-  threads[index].messages.push({ role, content, created_at: new Date().toISOString() });
+  const message = { role, content, created_at: new Date().toISOString() };
+  if (dictionary) message.dictionary = dictionary;
+  threads[index].messages.push(message);
   threads[index].updatedAt = new Date().toISOString();
   const [updated] = threads.splice(index, 1);
   threads.unshift(updated);
@@ -485,7 +487,7 @@ const generateEchatResponse = async (incomingMsgDiv, conversationId, sentMessage
         if (asks.childElementCount) msgElement.appendChild(asks);
       }
       finishMessage(incomingMsgDiv);
-      addThreadMessage(conversationId, "assistant", data.response);
+      addThreadMessage(conversationId, "assistant", data.response, data.dictionary);
       return;
     }
     throw new Error(data.error || "Backend returned no answer.");

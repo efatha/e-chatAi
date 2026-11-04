@@ -1471,6 +1471,7 @@ def _figure_kind(pixels, width, height):
         return "", 0
     skin_count = sum(_is_skin(pixel) for pixel in foreground)
     skin_share = skin_count / len(foreground)
+    green_share = sum(pixel[1] > pixel[0] + 8 and pixel[1] > 40 for pixel in foreground) / len(foreground)
     mean_spread = sum(spread(pixel) for pixel in foreground) / len(foreground)
     dark_head = 0
     head_cells = 0
@@ -1505,7 +1506,8 @@ def _figure_kind(pixels, width, height):
     ]
     stone = (
         black_bg > 0.2
-        and skin_share > 0.05
+        and skin_share > 0.45
+        and green_share < 0.04
         and mean_spread < 40
         and stone_skin
         and sum(spread(pixel) for pixel in stone_skin) / len(stone_skin) < 32
@@ -1696,6 +1698,8 @@ def _photo_reading(pixels, width, height, texts):
         interior = True
         building = building or "This image shows the inside of a house, with a light ceiling, windows, and a floor."
     figure = "" if interior else _human_form(pixels, width, height)
+    if building and kind not in {"person", "people"}:
+        figure = ""
     if kind == "person" and not figure:
         outfits = _outfit_phrase(pixels, width, height)
         worn = f" wearing {outfits[0]}" if outfits else ""

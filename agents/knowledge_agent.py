@@ -967,24 +967,41 @@ def _meta_text(meta, key):
 
 
 def wikipedia_definition(term, question=""):
-    """Wikipedia article text only, with no dictionary-site detour."""
+    """Wikipedia article text, with a plain dictionary line for one word."""
     subject = (term or "").strip()
     if not subject:
         return None
     if subject.lower() in {"ai", "a.i.", "a.i"}:
         subject = "Artificial intelligence"
     direct = _resolved_summary(subject)
-    if direct:
-        return direct
-    head = re.sub(
-        r"\s+in\s+(?:math|mathematics|statistics|science|programming)\b.*$",
-        "",
-        subject,
-        flags=re.IGNORECASE,
-    ).strip()
-    if head and head.lower() != subject.lower():
-        return _resolved_summary(head)
-    return None
+    if not direct:
+        head = re.sub(
+            r"\s+in\s+(?:math|mathematics|statistics|science|programming)\b.*$",
+            "",
+            subject,
+            flags=re.IGNORECASE,
+        ).strip()
+        if head and head.lower() != subject.lower():
+            direct = _resolved_summary(head)
+    if not direct:
+        return None
+    line = _plain_dictionary(subject)
+    if line:
+        return direct + "\n\n" + line
+    return direct
+
+
+def _plain_dictionary(term):
+    """One dictionary sentence, written as ordinary text."""
+    if not term or " " in term.strip():
+        return ""
+    entry = wiktionary_entry(term)
+    if not entry or not entry.get("senses"):
+        return ""
+    sense = entry["senses"][0]
+    part = sense.get("part") or ""
+    label = f" ({part})" if part else ""
+    return f"Dictionary{label}: {sense['text']}"
 
 
 def _resolved_summary(subject):
@@ -1108,35 +1125,48 @@ def word_reference(word):
     return "\n\n".join(parts) if parts else None
 
 
-def _wiktionary_definition(word):
+def wiktionary_entry(word):
+    """The dictionary line for one word, kept apart from a Wikipedia article."""
+    term = (word or "").strip()
+    if not term or " " in term:
+        return None
     try:
         response = requests.get(
             "https://en.wiktionary.org/api/rest_v1/page/definition/"
-            + requests.utils.quote(word),
+            + requests.utils.quote(term),
             headers={"User-Agent": WIKI_USER_AGENT},
-            timeout=6,
+            timeout=8,
         )
         if not response.ok:
             return None
-        lines = [f"📖 {word}"]
-        count = 0
+        senses = []
         for block in (response.json() or {}).get("en") or []:
-            part = block.get("partOfSpeech") or ""
+            part = (block.get("partOfSpeech") or "").strip()
             for item in block.get("definitions") or []:
-                count += 1
-                if count > 2:
-                    break
                 text = re.sub(r"<[^>]+>", "", item.get("definition") or "")
                 text = re.sub(r"\s+", " ", text).strip()
-                if text:
-                    label = f"{count}. ({part}) " if part else f"{count}. "
-                    lines.append(label + text)
-            if count > 2:
+                if not text:
+                    continue
+                senses.append({"part": part, "text": text})
+                if len(senses) == 3:
+                    break
+            if len(senses) == 3:
                 break
-        return "\n".join(lines) if count else None
-    except requests.RequestException as exc:
+    except (requests.RequestException, ValueError) as exc:
         logger.warning("Wiktionary request failed: %s", type(exc).__name__)
         return None
+    if not senses:
+        return None
+    lines = [term]
+    for sense in senses:
+        label = f"({sense['part']}) " if sense["part"] else ""
+        lines.append(label + sense["text"])
+    return {"word": term, "senses": senses, "text": "\n".join(lines)}
+
+
+def _wiktionary_definition(word):
+    entry = wiktionary_entry(word)
+    return entry["text"] if entry else None
 
 
 def _disambiguation_target(word):

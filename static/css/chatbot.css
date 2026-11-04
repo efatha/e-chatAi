@@ -403,6 +403,57 @@ body{
   font-family: Consolas, "Courier New", monospace;
   font-weight: 600;
 }
+.dict-card {
+  width: min(100%, 340px);
+  margin: 2px 0 4px;
+  padding: 14px 16px 12px;
+  background: #fffaf4;
+  color: #24312f;
+  border-radius: 18px;
+  border: 1px solid rgba(57, 125, 146, 0.16);
+  box-shadow: 0 12px 28px rgba(36, 49, 47, 0.16);
+}
+.dict-kicker {
+  margin: 0;
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: #397d92;
+}
+.dict-word {
+  margin: 2px 0 10px;
+  font-size: 1.45rem;
+  line-height: 1.1;
+  letter-spacing: -0.03em;
+  font-weight: 650;
+}
+.dict-line {
+  margin: 0 0 8px;
+  padding: 8px 10px;
+  font-size: 0.95rem;
+  line-height: 1.45;
+  background: #fff3c4;
+  border-left: 4px solid #e2a100;
+  border-radius: 10px;
+  box-shadow: 0 6px 14px rgba(226, 161, 0, 0.18);
+}
+.message-text.dict-bubble,
+.chat-body .message .message-text.dict-bubble {
+  background: transparent;
+  padding: 0;
+  box-shadow: none;
+}
+.dict-part {
+  display: inline-block;
+  margin-right: 8px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: rgba(57, 125, 146, 0.12);
+  color: #2d6678;
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  text-transform: lowercase;
+}
 .commons-photo {
   margin: 10px 0 0;
   max-width: 320px;
