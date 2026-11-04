@@ -209,8 +209,11 @@ const renderStoredMessage = (item) => {
   const avatar = item.role === "assistant"
     ? '<img class="bot-avatar" src="/static/images/artificial-intelligence.gif" alt="">'
     : "";
+  const body = /\[[^\]]+\]\(https?:\/\//.test(String(item.content || ""))
+    ? formatMarked(String(item.content || ""))
+    : escapeHtml(String(item.content || "")).replace(/\n/g, "<br>");
   const element = createMsgElement(
-    `${avatar}<div class="message-text">${escapeHtml(String(item.content || "")).replace(/\n/g, "<br>")}</div>`,
+    `${avatar}<div class="message-text">${body}</div>`,
     classes
   );
   if (item.weather) {
@@ -460,7 +463,7 @@ const generateEchatResponse = async (incomingMsgDiv, conversationId, sentMessage
     if (data.response) {
       msgElement.classList.remove("backend-error");
       const hasCode = /```[a-zA-Z0-9+#]*\n[\s\S]*?```/.test(data.response);
-      const hasMarks = /\*[^*\n]+\*/.test(data.response) || /_[^_\n]+_/.test(data.response) || /\bp\. \d+/.test(data.response);
+      const hasMarks = /\*[^*\n]+\*/.test(data.response) || /_[^_\n]+_/.test(data.response) || /\bp\. \d+/.test(data.response) || /\[[^\]]+\]\(https?:\/\//.test(data.response);
       if (hasCode) {
         const blocks = [];
         msgElement.innerHTML = renderReply(data.response, blocks);

@@ -19,6 +19,7 @@ from agents.knowledge_agent import (
     wikidata_current,
     wikidata_image,
     wikidata_research,
+    how_to_reply,
     weather_reply,
     wikipedia_definition,
     wikipedia_summary,
@@ -356,6 +357,15 @@ def answer_question(
             "source": "knowledge",
             "provider": "wikipedia",
         }
+
+    if text and not has_file:
+        guided = how_to_reply(text)
+        if guided:
+            return {
+                "response": _with_name(guided, username),
+                "source": "knowledge",
+                "provider": "duckduckgo",
+            }
 
     if text and not has_file and looks_like_open_question(text):
         reflected = search_result_text(text)

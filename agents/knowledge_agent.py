@@ -1681,6 +1681,71 @@ def _trim(text, limit):
     return cut + "..."
 
 
+_HOW = re.compile(
+    r"^how\s+(?:do\s+i|can\s+i|could\s+i|to|does\s+one)\s+(.+?)\s*[?.!]*$",
+    re.IGNORECASE,
+)
+_GUIDES = (
+    (
+        ("software engineer", "software engineering"),
+        "To become a software engineer, prepare knowledge, tools, and a computer you can practice on.\n\n"
+        "Knowledge: one programming language, how an app or a website is put together, and how to split a problem into small steps. "
+        "Build small projects after each lesson so the skill is yours, not only something you watched.\n\n"
+        "Tools: a code editor, Git to keep your work, and a web browser. "
+        "Equipment: a laptop that can run those is enough. You do not need a powerful machine.\n\n"
+        "Train for free at [freeCodeCamp](https://www.freecodecamp.org) "
+        "and [The Odin Project](https://www.theodinproject.com).",
+    ),
+    (
+        ("artificial intelligence", "an ai", " ai", "create ai", "make ai", "build ai"),
+        "To create an AI, start with a small program that learns from examples, not with a giant system.\n\n"
+        "Knowledge: basic Python, what data is, and the difference between a rule you wrote and a model trained on examples. "
+        "Tools: Python, a notebook or a code editor, and a free dataset. "
+        "Equipment: the same laptop you already use is enough for a first model.\n\n"
+        "Train for free at [freeCodeCamp](https://www.freecodecamp.org/news/tag/machine-learning/) "
+        "and [fast.ai](https://www.fast.ai).",
+    ),
+)
+
+
+def how_to_reply(message):
+    """A how-to question, spoken as advice with a training link when we have one."""
+    match = _HOW.match(re.sub(r"\s+", " ", (message or "")).strip())
+    if not match:
+        return None
+    goal = re.sub(r"\bbecomes\b", "become", match.group(1).strip(" ."), flags=re.IGNORECASE)
+    lowered = f" {goal.lower()} "
+    for keys, guide in _GUIDES:
+        if any(key in lowered for key in keys):
+            return guide
+    notes = _duckduckgo_snippets(message) or _wikipedia_snippet(goal)
+    spoken = [_spoken_note(note) for note in (notes or [])]
+    spoken = [note for note in spoken if note]
+    focused = [note for note in spoken if goal.lower() not in note.lower()[:70]]
+    spoken = focused or spoken
+    if not spoken:
+        return None
+    first, *rest = spoken
+    if not rest:
+        return f"To {goal}, {first}"
+    return f"To {goal}, {first} {rest[0][0].upper() + rest[0][1:]}"
+
+
+def _spoken_note(note):
+    text = re.sub(r"\s+", " ", note or "").strip()
+    text = re.sub(r"^[A-Z][^.]{0,40}\.\s+", "", text)
+    text = text.strip(" .")
+    if len(text) < 40:
+        return ""
+    words = text.split()
+    titled = sum(1 for word in words[:12] if word[:1].isupper())
+    if titled >= 5:
+        return ""
+    if len(text) > 280:
+        text = text[:280].rsplit(" ", 1)[0]
+    return text[0].lower() + text[1:].rstrip(".") + "."
+
+
 def looks_like_open_question(text):
     """An opinion or imagined situation, after the books have nothing to cite."""
     lowered = (text or "").lower()

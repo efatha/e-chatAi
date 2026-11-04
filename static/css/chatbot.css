@@ -378,7 +378,14 @@ body{
   background-color: var(--efa-sea);
   border: 1px solid pink;
 }
-.chat-body .message .message-text strong { font-weight: 700; }
+.chat-body .message .message-text a {
+  color: #f7fffb;
+  font-weight: 700;
+  text-decoration: underline;
+}
+.chat-body .message .message-text.weather-bubble a {
+  color: #9fdfff;
+}
 .chat-body .message .message-text em { font-style: italic; }
 .chat-body .message .message-text code {
   font-family: Consolas, "Courier New", monospace;
