@@ -136,6 +136,16 @@ def _chat_turn():
 
 
 # Both routes use the same local-only brain.
+@app.route("/weather")
+def weather_now():
+    from agents.knowledge_agent import weather_reply
+    place = re.sub(r"\s+", " ", str(request.args.get("place") or "")).strip()
+    reply = weather_reply(f"what is the weather in {place}") if place else None
+    if not reply or not reply.get("card"):
+        return jsonify({"error": "weather unavailable"}), 404
+    return jsonify({"response": reply["text"], "weather": reply["card"]})
+
+
 @app.route("/ask", methods=["POST"])
 @app.route("/brain", methods=["POST"])
 def ask():

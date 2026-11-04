@@ -9,7 +9,7 @@ import logging
 import os
 import random
 import re
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 
 import requests
 
@@ -1027,10 +1027,11 @@ def weather_reply(message):
             "text": f"I couldn't read the weather for {found['label']} just now.",
             "card": None,
         }
+    card["query"] = place
     return {
         "text": (
-            f"{card['place']} is {card['temperature']}°C and {card['condition'].lower()} "
-            f"right now, {card['date']} at {card['clock']}."
+            f"{card['place']} is {card['temperature']}°C and {card['condition'].lower()}. "
+            f"{card['reading']} {card['clock']}."
         ),
         "card": card,
     }
@@ -1088,7 +1089,7 @@ def _weather_card(place):
     if current.get("temperature_2m") is None:
         return None
     when = current.get("time") or ""
-    stamp = _weather_stamp(when)
+    stamp = _weather_stamp(when, payload.get("utc_offset_seconds") or 0)
     code = int(current.get("weather_code") or 0)
     condition, icon = _WEATHER_CODE.get(code, ("Mixed", "cloud"))
     hours = _weather_hours(hourly, when)
@@ -1100,6 +1101,7 @@ def _weather_card(place):
         "place": place["label"],
         "date": stamp["date"],
         "clock": stamp["clock"],
+        "reading": stamp["reading"],
         "temperature": round(current["temperature_2m"]),
         "condition": condition,
         "icon": icon,
@@ -1111,15 +1113,19 @@ def _weather_card(place):
     }
 
 
-def _weather_stamp(value):
+def _weather_stamp(value, offset_seconds=0):
     try:
         moment = datetime.fromisoformat(value)
     except ValueError:
-        return {"date": "", "clock": ""}
+        return {"date": "", "clock": "", "reading": "Last reading"}
     hour = moment.strftime("%I").lstrip("0") or "12"
+    local_now = datetime.now(timezone.utc) + timedelta(seconds=int(offset_seconds or 0))
+    age = local_now.replace(tzinfo=None) - moment.replace(tzinfo=None)
+    reading = "Live" if timedelta(0) <= age <= timedelta(minutes=5) else "Last reading"
     return {
         "date": moment.strftime("%A, %-d %B %Y") if os.name != "nt" else moment.strftime("%A, %#d %B %Y"),
         "clock": f"{hour}:{moment.strftime('%M')} {moment.strftime('%p')}",
+        "reading": reading,
     }
 
 

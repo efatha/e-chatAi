@@ -17,6 +17,7 @@ const appShell = document.querySelector(".app-shell");
 const chatWelcome = document.querySelector("#chat-welcome");
 const THREADS_KEY = "eChatConversationThreads";
 const OLD_MEMORY_KEY = "eChatConversationMemory";
+const ACTIVE_KEY = "eChatActiveConversation";
 let activeConversationId = null;
 
 const userData = {
@@ -150,6 +151,7 @@ const deleteConversation = (conversationId) => {
   saveThreads(threads);
   if (activeConversationId === conversationId) {
     activeConversationId = null;
+    localStorage.removeItem(ACTIVE_KEY);
     clearChatPanel();
     setWelcomeVisible(true);
   }
@@ -172,6 +174,7 @@ const weatherIcon = (kind) => {
 const renderWeather = (card) => {
   const root = document.createElement("div");
   root.className = "weather-card";
+  if (card.query) root.dataset.place = card.query;
   const degree = (value) => (value == null ? "—" : `${value}°C`);
   const hours = (card.hours || []).map((hour) => `
     <div class="weather-hour">
@@ -185,14 +188,14 @@ const renderWeather = (card) => {
       <div>
         <p class="weather-temp">${degree(card.temperature)}</p>
         <p class="weather-condition">${escapeHtml(card.condition || "")}</p>
-        <p class="weather-where">${escapeHtml(card.place || "")}${card.clock ? ` · ${escapeHtml(card.clock)}` : ""}</p>
+        <p class="weather-where">${escapeHtml(card.place || "")}${card.clock ? ` · ${escapeHtml(card.reading || "Last reading")} ${escapeHtml(card.clock)}` : ""}</p>
       </div>
       <div class="weather-mark">${weatherIcon(card.icon)}</div>
     </div>
     <div class="weather-facts">
       <p><span>Today's high</span><strong>${degree(card.high)}</strong></p>
       <p><span>Tonight's low</span><strong>${degree(card.low)}</strong></p>
-      <p><span>Rain chance now${card.clock ? ` (${escapeHtml(card.clock)})` : ""}</span><strong>${card.rain == null ? "—" : `${card.rain}%`}</strong></p>
+      <p><span>Rain chance at this reading</span><strong>${card.rain == null ? "—" : `${card.rain}%`}</strong></p>
       <p><span>Humidity</span><strong>${escapeHtml(card.humidity || "—")}</strong></p>
     </div>
     <div class="weather-hours">${hours}</div>
@@ -210,7 +213,10 @@ const renderStoredMessage = (item) => {
     `${avatar}<div class="message-text">${escapeHtml(String(item.content || "")).replace(/\n/g, "<br>")}</div>`,
     classes
   );
-  if (item.weather) element.appendChild(renderWeather(item.weather));
+  if (item.weather) {
+    element.querySelector(".message-text").classList.add("weather-bubble");
+    element.querySelector(".message-text").appendChild(renderWeather(item.weather));
+  }
   eChatBody.insertBefore(element, eChatBody.querySelector(".echat-footer"));
 };
 
@@ -218,6 +224,7 @@ const openConversation = (conversationId) => {
   const thread = readThreads().find((item) => item.id === conversationId);
   if (!thread) return;
   activeConversationId = thread.id;
+  localStorage.setItem(ACTIVE_KEY, thread.id);
   clearChatPanel();
   setWelcomeVisible(false);
   (thread.messages || []).forEach(renderStoredMessage);
@@ -227,6 +234,7 @@ const openConversation = (conversationId) => {
 
 const startNewConversation = () => {
   activeConversationId = null;
+  localStorage.removeItem(ACTIVE_KEY);
   clearChatPanel();
   setWelcomeVisible(true);
   renderMemoryLinks(memorySearch.value);
@@ -246,6 +254,7 @@ const ensureConversation = (firstMessage) => {
   threads.unshift(thread);
   saveThreads(threads);
   activeConversationId = id;
+  localStorage.setItem(ACTIVE_KEY, id);
   setWelcomeVisible(false);
   renderMemoryLinks(memorySearch.value);
   return thread;
@@ -619,7 +628,50 @@ eFile.addEventListener("change", () => {
   reader.readAsDataURL(file);
 });
 
+const rememberWeather = (place, text, card) => {
+  const threads = readThreads();
+  threads.forEach((thread) => {
+    (thread.messages || []).forEach((message) => {
+      if (message.weather && message.weather.query === place) {
+        message.weather = card;
+        message.content = text;
+      }
+    });
+  });
+  saveThreads(threads);
+};
+
+const refreshWeatherCards = async () => {
+  const cards = [...eChatBody.querySelectorAll(".weather-card[data-place]")];
+  await Promise.all(cards.map(async (card) => {
+    const place = card.dataset.place;
+    try {
+      const response = await fetch(`/weather?place=${encodeURIComponent(place)}`);
+      if (!response.ok) return;
+      const data = await response.json();
+      if (!data.weather) return;
+      const bubble = card.closest(".message-text");
+      const fresh = renderWeather(data.weather);
+      card.replaceWith(fresh);
+      const line = bubble && bubble.childNodes[0];
+      if (line && line.nodeType === Node.TEXT_NODE) {
+        const named = line.textContent.match(/^(\s*[^,]{1,80}, )/);
+        line.textContent = `${named ? named[1] : ""}${data.response}`;
+      }
+      rememberWeather(place, line && line.textContent ? line.textContent : data.response, data.weather);
+    } catch (_error) {
+      /* keep the card already on screen */
+    }
+  }));
+};
+
 migrateOldMemory();
+const savedConversation = localStorage.getItem(ACTIVE_KEY);
+if (savedConversation && readThreads().some((thread) => thread.id === savedConversation)) {
+  openConversation(savedConversation);
+}
+setInterval(refreshWeatherCards, 60000);
+refreshWeatherCards();
 startNewConversation();
 
 const zoomLayer = document.createElement("div");
