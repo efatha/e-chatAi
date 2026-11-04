@@ -44,6 +44,10 @@ def interpret_image(file, question=""):
         return {"response": reply, "lines": "\n".join(texts)}
     pixels, width, height = decoded
     intent = _intent(question)
+    if intent != "text":
+        seen = _yolo_reading(raw, pixels, width, height)
+        if seen:
+            return {"response": seen, "lines": ""}
     lines = []
     if intent != "color":
         lines = _read_text(
@@ -56,6 +60,132 @@ def interpret_image(file, question=""):
     )
     texts = [_line_text(line) for line in lines]
     return {"response": reply, "lines": "\n".join(texts)}
+
+
+_YOLO_MODEL = None
+
+
+def _yolo_model():
+    """The small local YOLO model. No fee; the file stays on this computer."""
+    global _YOLO_MODEL
+    if _YOLO_MODEL is False:
+        return None
+    if _YOLO_MODEL is not None:
+        return _YOLO_MODEL
+    try:
+        from ultralytics import YOLO
+    except ImportError:
+        _YOLO_MODEL = False
+        return None
+    try:
+        _YOLO_MODEL = YOLO("yolo11n.pt")
+    except Exception:
+        logger = __import__("logging").getLogger(__name__)
+        logger.warning("YOLO model could not be loaded")
+        _YOLO_MODEL = False
+        return None
+    return _YOLO_MODEL
+
+
+def _region_cloth(image, box, y0, y1):
+    x1, y1b, x2, y2 = (int(value) for value in box)
+    if x2 <= x1 or y2 <= y1b:
+        return ""
+    height = y2 - y1b
+    top = y1b + int(height * y0)
+    bottom = y1b + int(height * y1)
+    step = max(1, min(x2 - x1, bottom - top) // 12)
+    picked = []
+    for y in range(top, bottom, step):
+        for x in range(x1 + (x2 - x1) // 3, x2 - (x2 - x1) // 3, step):
+            pixel = image.getpixel((x, y))
+            red, green, blue = pixel
+            if _is_skin(pixel):
+                continue
+            if green > red + 12 and green > 70:
+                continue
+            if blue > red + 40 and blue > green + 15:
+                continue
+            level = (red + green + blue) / 3
+            if 25 < level < 235:
+                picked.append(pixel)
+    if len(picked) < 4:
+        return ""
+    names = [_cloth_name(pixel) for pixel in picked]
+    return max(set(names), key=names.count)
+
+
+def _yolo_reading(raw, pixels, width, height):
+    """Person and object boxes from YOLO, with clothes read inside each person."""
+    kind, _count = _figure_kind(pixels, width, height)
+    if kind == "robot":
+        return "This image shows a robot standing in a human pose. It is not a person."
+    if kind == "statue":
+        return "This image shows a statue in a human pose. It is not a person."
+    model = _yolo_model()
+    if model is None:
+        return ""
+    try:
+        from io import BytesIO
+        from PIL import Image
+        image = Image.open(BytesIO(raw)).convert("RGB")
+    except Exception:
+        return ""
+    try:
+        found = model.predict(image, verbose=False, conf=0.35, imgsz=640)
+    except Exception:
+        return ""
+    if not found:
+        return ""
+    boxes = found[0].boxes
+    if boxes is None or len(boxes) == 0:
+        return ""
+    names = found[0].names or {}
+    people = []
+    objects = []
+    for box in boxes:
+        label = names.get(int(box.cls[0]), "")
+        if label == "person":
+            people.append(box.xyxy[0].tolist())
+        elif label:
+            objects.append(label.replace("_", " "))
+    outfits = []
+    for box in people[:4]:
+        top = _region_cloth(image, box, 0.18, 0.48)
+        legs = _region_cloth(image, box, 0.55, 0.88)
+        if top and legs and legs != top:
+            outfits.append(f"a {top} top and {legs} trousers")
+        elif top:
+            outfits.append(f"a {top} top")
+        elif legs:
+            outfits.append(f"{legs} trousers")
+    if not people and not objects:
+        return ""
+    if "book" in objects and people:
+        return "This image shows a book held in a person's hand."
+    parts = []
+    if len(people) == 1:
+        worn = f" wearing {outfits[0]}" if outfits else ""
+        parts.append(f"This image shows a person{worn}")
+    elif len(people) > 1:
+        parts.append(f"This image shows {len(people)} people")
+        if outfits:
+            parts.append(". " + " ".join(f"One is wearing {item}." for item in outfits).rstrip("."))
+    unique = []
+    for name in objects:
+        if name not in unique:
+            unique.append(name)
+    if unique:
+        listed = ", ".join(f"a {name}" for name in unique[:4])
+        if parts:
+            parts.append(f". There is also {listed}")
+        else:
+            parts.append(f"This image shows {listed}")
+    sentence = "".join(parts).rstrip(".") + "."
+    building = _building_view(pixels, width, height)
+    if people and building.startswith("This image shows the outside"):
+        sentence = sentence[:-1] + ", in front of a house, outside."
+    return sentence
 
 
 def _intent(question):
@@ -190,13 +320,11 @@ def _pillow_pixels(raw):
     width, height = image.size
     if width < 1 or height < 1:
         return None
-    step = max(1, int((width * height / 4000) ** 0.5))
-    pixels = [
-        image.getpixel((x, y))
-        for y in range(0, height, step)
-        for x in range(0, width, step)
-    ]
-    return pixels, width, height
+    step = max(1, int((width * height / 80000) ** 0.5))
+    xs = range(0, width, step)
+    ys = range(0, height, step)
+    pixels = [image.getpixel((x, y)) for y in ys for x in xs]
+    return pixels, len(xs), len(ys)
 
 
 def _png_pixels(raw):
@@ -1233,6 +1361,221 @@ def _house_sentence(seen, skin_share, top_n, top_level, bot_n, bot_level, sky, w
     return f"This image shows {place}, with {listed}."
 
 
+def _grid(pixels, width, height, cols, rows):
+    grid = []
+    for y in range(rows):
+        sy = min(height - 1, y * height // rows)
+        row = []
+        for x in range(cols):
+            sx = min(width - 1, x * width // cols)
+            row.append(pixels[sy * width + sx])
+        grid.append(row)
+    return grid
+
+
+def _components(mask, cols, rows, minimum):
+    seen = [[False] * cols for _ in range(rows)]
+    found = []
+    for y in range(rows):
+        for x in range(cols):
+            if seen[y][x] or not mask[y][x]:
+                continue
+            stack = [(x, y)]
+            seen[y][x] = True
+            cells = []
+            while stack:
+                cx, cy = stack.pop()
+                cells.append((cx, cy))
+                for ny in range(cy - 1, cy + 2):
+                    for nx in range(cx - 1, cx + 2):
+                        if 0 <= ny < rows and 0 <= nx < cols and not seen[ny][nx] and mask[ny][nx]:
+                            seen[ny][nx] = True
+                            stack.append((nx, ny))
+            if len(cells) >= minimum:
+                found.append(cells)
+    return found
+
+
+def _real_eyes(grid, cells):
+    """Two darker spots in a face, with color, the way a photograph shows eyes."""
+    levels = [sum(grid[y][x]) / 3 for x, y in cells]
+    if not levels:
+        return False
+    mean = sum(levels) / len(levels)
+    dark = [(x, y) for x, y in cells if sum(grid[y][x]) / 3 < mean - 38 and max(grid[y][x]) - min(grid[y][x]) > 8]
+    if len(dark) < 2:
+        return False
+    ys = [y for _x, y in cells]
+    top, bottom = min(ys), max(ys)
+    upper = [(x, y) for x, y in dark if y <= top + (bottom - top) * 0.65]
+    if len(upper) < 2:
+        return False
+    xs = sorted(x for x, _y in upper)
+    return xs[-1] - xs[0] >= 2
+
+
+def _face_boxes(grid, cols, rows):
+    skin_mask = [[_is_skin(grid[y][x]) for x in range(cols)] for y in range(rows)]
+    faces = []
+    for cells in _components(skin_mask, cols, rows, 6):
+        xs = [cell[0] for cell in cells]
+        ys = [cell[1] for cell in cells]
+        wide = max(xs) - min(xs) + 1
+        tall = max(ys) - min(ys) + 1
+        if not (2 <= wide <= max(16, cols // 3) and 2 <= tall <= max(20, rows // 4) and len(cells) <= max(140, cols * 2)):
+            continue
+        if not _real_eyes(grid, cells):
+            continue
+        faces.append((min(xs), max(xs), min(ys), max(ys)))
+    return faces
+
+
+def _figure_kind(pixels, width, height):
+    """A real face plus a body pose. A robot or a statue can copy the pose and still fail."""
+    cols, rows = 42, 58
+    grid = _grid(pixels, width, height, cols, rows)
+
+    def level(pixel):
+        return sum(pixel) / 3
+
+    def spread(pixel):
+        return max(pixel) - min(pixel)
+
+    faces = _face_boxes(grid, cols, rows)
+    if len(faces) >= 2:
+        return "people", len(faces)
+    if len(faces) == 1:
+        left, right, top, bottom = faces[0]
+        mid = (left + right) // 2
+        body = 0
+        for y in range(bottom + 1, min(rows, bottom + max(8, (bottom - top + 1) * 4))):
+            if any(not _is_skin(grid[y][x]) and 25 < level(grid[y][x]) < 230 for x in range(max(0, mid - 3), min(cols, mid + 4))):
+                body += 1
+        if body >= 4:
+            return "person", 1
+
+    black_bg = sum(level(grid[y][x]) < 28 for y in range(rows) for x in range(cols)) / (cols * rows)
+    white_bg = sum(level(grid[y][x]) > 228 for y in range(rows) for x in range(cols)) / (cols * rows)
+    foreground = []
+    for y in range(rows):
+        for x in range(cols):
+            pixel = grid[y][x]
+            bright = level(pixel)
+            if 18 < bright < 245:
+                foreground.append(pixel)
+    if len(foreground) < cols * rows * 0.08:
+        return "", 0
+    skin_count = sum(_is_skin(pixel) for pixel in foreground)
+    skin_share = skin_count / len(foreground)
+    mean_spread = sum(spread(pixel) for pixel in foreground) / len(foreground)
+    dark_head = 0
+    head_cells = 0
+    ys = []
+    for y in range(rows):
+        for x in range(cols):
+            if 18 < level(grid[y][x]) < 245:
+                ys.append(y)
+    if not ys:
+        return "", 0
+    top, bottom = min(ys), max(ys)
+    tall = bottom - top + 1
+    for y in range(top, min(rows, top + max(3, tall // 7))):
+        for x in range(cols):
+            pixel = grid[y][x]
+            if not (18 < level(pixel) < 245):
+                continue
+            head_cells += 1
+            if level(pixel) < 55 and not _is_skin(pixel):
+                dark_head += 1
+    mechanical = (
+        white_bg > 0.45
+        and mean_spread < 16
+        and tall > rows * 0.4
+        and not faces
+    )
+    if mechanical:
+        return "robot", 0
+    stone_skin = [
+        pixel for pixel in foreground
+        if _is_skin(pixel) or (spread(pixel) < 36 and 120 < level(pixel) < 210)
+    ]
+    stone = (
+        black_bg > 0.2
+        and skin_share > 0.05
+        and mean_spread < 40
+        and stone_skin
+        and sum(spread(pixel) for pixel in stone_skin) / len(stone_skin) < 32
+        and tall > rows * 0.5
+        and not faces
+    )
+    if stone:
+        return "statue", 0
+    return "", 0
+
+
+def _band_color(grid, cols, rows, box, y0, y1):
+    left, right, top, bottom = box
+    face_tall = max(2, bottom - top + 1)
+    mid = (left + right) // 2
+    span = max(4, cols // 8)
+    picked = []
+    y_start = min(rows - 1, bottom + int(face_tall * y0))
+    y_end = min(rows, bottom + int(face_tall * y1))
+    for y in range(y_start, y_end):
+        for x in range(max(0, mid - span), min(cols, mid + span + 1)):
+            pixel = grid[y][x]
+            red, green, blue = pixel
+            if _is_skin(pixel):
+                continue
+            level = sum(pixel) / 3
+            if green > red + 12 and green > 70:
+                continue
+            if blue > red + 40 and blue > green + 15:
+                continue
+            if 25 < level < 235:
+                picked.append(pixel)
+    if len(picked) < 4:
+        return ""
+    names = [_cloth_name(pixel) for pixel in picked]
+    return max(set(names), key=names.count)
+
+
+def _outfit_phrase(pixels, width, height):
+    """Clothes under a real face, only when the body continues down the frame."""
+    cols, rows = 42, 58
+    grid = _grid(pixels, width, height, cols, rows)
+    phrases = []
+    boxes = sorted(_face_boxes(grid, cols, rows), key=lambda box: (box[0] + box[1]) / 2)
+    kept = []
+    for box in boxes:
+        center = (box[0] + box[1]) / 2
+        if any(abs(center - (other[0] + other[1]) / 2) < 6 and box[2] > other[3] for other in kept):
+            continue
+        kept.append(box)
+    for box in kept:
+        left, right, top, bottom = box
+        face_tall = max(2, bottom - top + 1)
+        mid = (left + right) // 2
+        below = 0
+        for y in range(bottom + 1, min(rows, bottom + face_tall * 4)):
+            if any(
+                not _is_skin(grid[y][x]) and 25 < sum(grid[y][x]) / 3 < 235
+                for x in range(max(0, mid - 3), min(cols, mid + 4))
+            ):
+                below += 1
+        if below < face_tall:
+            continue
+        top_color = _band_color(grid, cols, rows, box, 0.15, 1.15)
+        leg_color = _band_color(grid, cols, rows, box, 1.8, 3.4)
+        if not top_color:
+            continue
+        if leg_color and leg_color != top_color:
+            phrases.append(f"a {top_color} top and {leg_color} trousers")
+        else:
+            phrases.append(f"a {top_color} top")
+    return phrases
+
+
 def _photo_reading(pixels, width, height, texts):
     """A person, a group, or produce, instead of counting squares on a photograph."""
     if width < 8 or height < 8:
@@ -1324,6 +1667,21 @@ def _photo_reading(pixels, width, height, texts):
         tone = "light-skinned" if sum(tone_rgb) / tone_pixels / 3 > 168 else "dark-skinned"
     strong = [name for name, count in hues.items() if count / seen > 0.04]
     building = _building_view(pixels, width, height)
+    kind, count = _figure_kind(pixels, width, height)
+    if kind == "robot":
+        return "This image shows a robot standing in a human pose. It is not a person."
+    if kind == "statue":
+        return "This image shows a statue in a human pose. It is not a person."
+    if kind == "people":
+        place = ", sitting outside in front of a building" if building else ""
+        outfits = _outfit_phrase(pixels, width, height)
+        worn = ""
+        if outfits:
+            worn = " " + " ".join(f"One is wearing {item}." for item in outfits[:4])
+        return (
+            f"This image shows {count} people{place}. "
+            f"Each one has a head, a torso, and limbs in a human pose.{worn}"
+        )
     held = "" if building else _held_book(pixels, width, height)
     if held:
         return held
@@ -1334,8 +1692,15 @@ def _photo_reading(pixels, width, height, texts):
         interior = True
         building = building or "This image shows the inside of a house, with a light ceiling, windows, and a floor."
     figure = "" if interior else _human_form(pixels, width, height)
+    if kind == "person" and not figure:
+        outfits = _outfit_phrase(pixels, width, height)
+        worn = f" wearing {outfits[0]}" if outfits else ""
+        figure = f"This image shows a person standing{worn}"
+    if figure and (kind == "person" or building) and "standing" not in figure and "silhouette" not in figure:
+        figure = figure.replace("This image shows a full-length person", "This image shows a person standing", 1)
+        figure = figure.replace("This image shows a person from the head", "This image shows a person standing, seen from the head", 1)
     if figure and building:
-        place = "inside a house" if interior else "next to a house, outside"
+        place = "inside a house" if interior else "in front of a house, outside"
         return figure[:-1] + f", {place}."
     if building and not figure:
         return building
