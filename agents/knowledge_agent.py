@@ -5,11 +5,13 @@ Wikipedia. When Ollama is running, Flask asks it to explain those notes and
 returns both together.
 """
 
+import json
 import logging
 import os
 import random
 import re
 from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
 
 import requests
 
@@ -147,6 +149,14 @@ def commons_image(term):
     subject = (term or "").strip()
     if not subject:
         return None
+    photo = _fresh_commons_image(subject)
+    if photo:
+        _remember_image(subject, photo)
+        return photo
+    return _remembered_image(subject)
+
+
+def _fresh_commons_image(subject):
     try:
         response = requests.get(
             "https://commons.wikimedia.org/w/api.php",
@@ -733,14 +743,46 @@ def _sparql(query):
 
 
 def wikidata_image(term):
-    """The lead picture Wikidata stores for a topic, not an older search hit."""
-    item = _wikidata_item(term)
-    if not item:
+    """The lead picture Wikidata stores for a topic, or the last saved one."""
+    subject = (term or "").strip()
+    item = _wikidata_item(subject) if subject else None
+    filename = _claim_filename(item, "P18") or _claim_filename(item, "P41") if item else None
+    photo = _commons_file(filename) if filename else None
+    if photo:
+        _remember_image(subject, photo)
+        return photo
+    return _remembered_image(subject)
+
+
+_IMAGE_CACHE = Path(__file__).resolve().parent.parent / "image_cache.json"
+
+
+def _remember_image(term, photo):
+    key = (term or "").strip().lower()
+    if not key or not photo or not photo.get("thumbnail"):
+        return
+    saved = _image_store()
+    saved[key] = photo
+    try:
+        _IMAGE_CACHE.write_text(json.dumps(saved), encoding="utf-8")
+    except OSError:
+        return
+
+
+def _remembered_image(term):
+    key = (term or "").strip().lower()
+    if not key:
         return None
-    filename = _claim_filename(item, "P18") or _claim_filename(item, "P41")
-    if not filename:
-        return None
-    return _commons_file(filename)
+    photo = _image_store().get(key)
+    return photo if isinstance(photo, dict) and photo.get("thumbnail") else None
+
+
+def _image_store():
+    try:
+        saved = json.loads(_IMAGE_CACHE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return saved if isinstance(saved, dict) else {}
 
 
 def _current_office(place, role, prop):
