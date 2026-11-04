@@ -403,6 +403,24 @@ body{
   font-family: Consolas, "Courier New", monospace;
   font-weight: 600;
 }
+.commons-photo {
+  margin: 10px 0 0;
+  max-width: 320px;
+}
+.commons-photo img {
+  display: block;
+  width: 100%;
+  border-radius: 12px;
+  cursor: zoom-in;
+}
+.commons-photo figcaption {
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+.commons-photo figcaption a {
+  color: inherit;
+}
 .reply-prose a[href*="wikipedia.org/wiki/"] {
   display: inline-flex;
   align-items: center;

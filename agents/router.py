@@ -14,6 +14,8 @@ from agents.knowledge_agent import (
     detect_lookup,
     looks_like_open_question,
     search_result_text,
+    commons_image,
+    picture_request,
     wikipedia_definition,
     wikipedia_summary,
 )
@@ -289,6 +291,30 @@ def answer_question(
         if known:
             return known
 
+    if text and not has_file:
+        pictured = picture_request(text)
+        if pictured:
+            photo = commons_image(pictured)
+            if photo:
+                reply = _with_name(
+                    f"Here is a picture of {pictured} from Wikimedia Commons.",
+                    username,
+                )
+                return {
+                    "response": reply,
+                    "source": "knowledge",
+                    "provider": "commons",
+                    "commons": photo,
+                }
+            return {
+                "response": _with_name(
+                    f"I couldn’t find a free picture of {pictured} on Wikimedia Commons.",
+                    username,
+                ),
+                "source": "knowledge",
+                "provider": "commons",
+            }
+
     if text and not has_file and detect_lookup(text):
         defined = _definition_from_local_or_wikipedia(text, independent, username)
         if defined:
@@ -455,11 +481,15 @@ def _definition_from_local_or_wikipedia(text, independent, username):
     external = wikipedia_definition(found["term"], text)
     if not external:
         return None
-    return {
+    result = {
         "response": _with_name(external, username),
         "source": "knowledge",
         "provider": "wikipedia",
     }
+    photo = commons_image(found["term"])
+    if photo:
+        result["commons"] = photo
+    return result
 
 
 def _image_lines(response):

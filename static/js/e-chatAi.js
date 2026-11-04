@@ -424,6 +424,33 @@ const generateEchatResponse = async (incomingMsgDiv, conversationId, sentMessage
           msgElement.style.color = "#fff8f2";
         }
       }
+      if (data.commons && data.commons.thumbnail) {
+        const figure = document.createElement("figure");
+        figure.className = "commons-photo";
+        const image = document.createElement("img");
+        image.src = data.commons.thumbnail;
+        image.alt = data.commons.title || "Wikimedia Commons image";
+        figure.appendChild(image);
+        const caption = document.createElement("figcaption");
+        const credit = document.createElement("a");
+        credit.href = data.commons.page;
+        credit.target = "_blank";
+        credit.rel = "noopener";
+        credit.textContent = data.commons.creator || "Wikimedia Commons";
+        caption.appendChild(credit);
+        caption.appendChild(document.createTextNode(" · " + (data.commons.license || "Commons")));
+        if (data.commons.license_url) {
+          const license = document.createElement("a");
+          license.href = data.commons.license_url;
+          license.target = "_blank";
+          license.rel = "noopener";
+          license.textContent = "license";
+          caption.appendChild(document.createTextNode(" · "));
+          caption.appendChild(license);
+        }
+        figure.appendChild(caption);
+        msgElement.appendChild(figure);
+      }
       if (data.portrait) {
         const photo = document.createElement("img");
         photo.className = "creator-photo";
@@ -567,7 +594,7 @@ const closeImageZoom = () => {
 };
 
 document.addEventListener("click", (event) => {
-  const host = event.target.closest(".creator-photo, .uploaded-image");
+  const host = event.target.closest(".creator-photo, .uploaded-image, .commons-photo");
   if (!host) return;
   const image = host.tagName === "IMG" ? host : host.querySelector("img");
   if (!image) return;

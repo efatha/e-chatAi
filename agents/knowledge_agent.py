@@ -124,6 +124,76 @@ def dictionary_entry(term):
         return None
 
 
+PICTURE_RE = re.compile(
+    r"^(?:please\s+)?(?:show|give|find|display|get)(?:\s+me)?(?:\s+a|\s+an|\s+the)?"
+    r"\s+(?:picture|photo|photograph|image)s?\s+of\s+(.+?)\s*[?.!]*$",
+    re.IGNORECASE,
+)
+
+
+def picture_request(message):
+    """Return the topic when the user asks to see a picture."""
+    match = PICTURE_RE.match((message or "").strip())
+    if not match:
+        return None
+    term = _clean_term(match.group(1))
+    return term if _usable_term(term) else None
+
+
+def commons_image(term):
+    """One free image from Wikimedia Commons, with credit and a license."""
+    subject = (term or "").strip()
+    if not subject:
+        return None
+    try:
+        response = requests.get(
+            "https://commons.wikimedia.org/w/api.php",
+            params={
+                "action": "query",
+                "format": "json",
+                "generator": "search",
+                "gsrsearch": subject,
+                "gsrnamespace": 6,
+                "gsrlimit": 8,
+                "prop": "imageinfo",
+                "iiprop": "url|extmetadata|mime",
+                "iiurlwidth": 640,
+            },
+            headers={"User-Agent": WIKI_USER_AGENT},
+            timeout=8,
+        )
+        response.raise_for_status()
+        pages = (response.json().get("query") or {}).get("pages") or {}
+    except (requests.RequestException, ValueError) as exc:
+        logger.warning("Commons search failed: %s", type(exc).__name__)
+        return None
+    for page in pages.values():
+        info = (page.get("imageinfo") or [None])[0] or {}
+        mime = (info.get("mime") or "").lower()
+        thumb = info.get("thumburl") or ""
+        if mime not in {"image/jpeg", "image/png", "image/webp"} or not thumb:
+            continue
+        meta = info.get("extmetadata") or {}
+        title = page.get("title") or subject
+        slug = title.replace(" ", "_")
+        return {
+            "thumbnail": thumb,
+            "page": "https://commons.wikimedia.org/wiki/" + requests.utils.quote(slug),
+            "title": title.replace("File:", ""),
+            "creator": _meta_text(meta, "Artist") or "Unknown creator",
+            "license": _meta_text(meta, "LicenseShortName") or "See the Commons page",
+            "license_url": _meta_text(meta, "LicenseUrl"),
+        }
+    return None
+
+
+def _meta_text(meta, key):
+    raw = ((meta.get(key) or {}).get("value") or "").strip()
+    text = re.sub(r"<[^>]+>", "", raw)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text[:180]
+
+
 def wikipedia_definition(term, question=""):
     """Wikipedia article text only, with no dictionary-site detour."""
     subject = (term or "").strip()
