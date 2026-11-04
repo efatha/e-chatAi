@@ -195,7 +195,16 @@ _OFFICE = re.compile(
     re.IGNORECASE,
 )
 _CAPITAL = re.compile(
-    r"^(?:what(?:'s| is))\s+(?:the\s+)?(?:current\s+)?capital\s+of\s+(.+?)\s*[?.!]*$",
+    r"^(?:(?:what|which)(?:'s| is)|where(?:'s| is)|name|tell me)\s+"
+    r"(?:the\s+)?(?:current\s+)?capital(?:\s+city)?\s+of\s+(.+?)\s*[?.!]*$",
+    re.IGNORECASE,
+)
+_CAPITAL_CITY = re.compile(
+    r"^(?:what|which)\s+city\s+is\s+(?:the\s+)?(?:current\s+)?capital(?:\s+city)?\s+of\s+(.+?)\s*[?.!]*$",
+    re.IGNORECASE,
+)
+_CAPITAL_OWN = re.compile(
+    r"^(?:what|which)(?:'s| is)\s+(.+?)(?:'s)\s+(?:current\s+)?capital(?:\s+city)?\s*[?.!]*$",
     re.IGNORECASE,
 )
 _FLAG = re.compile(
@@ -216,7 +225,7 @@ def wikidata_current(message):
     """The fact that is true today, plus the picture Wikidata points to."""
     text = (message or "").strip()
     office = _OFFICE.match(text)
-    capital = _CAPITAL.match(text)
+    capital = _CAPITAL.match(text) or _CAPITAL_CITY.match(text) or _CAPITAL_OWN.match(text)
     flag = _FLAG.match(text)
     if office:
         role = office.group(1).lower()
