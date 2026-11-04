@@ -16,6 +16,9 @@ from agents.knowledge_agent import (
     search_result_text,
     commons_image,
     picture_request,
+    wikidata_current,
+    wikidata_image,
+    wikidata_research,
     wikipedia_definition,
     wikipedia_summary,
 )
@@ -292,6 +295,18 @@ def answer_question(
             return known
 
     if text and not has_file:
+        current = wikidata_current(text) or wikidata_research(text)
+        if current:
+            result = {
+                "response": _with_name(current["text"], username),
+                "source": "knowledge",
+                "provider": "wikidata",
+            }
+            if current.get("commons"):
+                result["commons"] = current["commons"]
+            return result
+
+    if text and not has_file:
         pictured = picture_request(text)
         if pictured:
             photo = commons_image(pictured)
@@ -486,7 +501,7 @@ def _definition_from_local_or_wikipedia(text, independent, username):
         "source": "knowledge",
         "provider": "wikipedia",
     }
-    photo = commons_image(found["term"])
+    photo = wikidata_image(found["term"]) or commons_image(found["term"])
     if photo:
         result["commons"] = photo
     return result

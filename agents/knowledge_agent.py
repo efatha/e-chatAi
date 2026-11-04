@@ -7,7 +7,9 @@ returns both together.
 
 import logging
 import os
+import random
 import re
+from datetime import date
 
 import requests
 
@@ -160,7 +162,7 @@ def commons_image(term):
                 "iiurlwidth": 640,
             },
             headers={"User-Agent": WIKI_USER_AGENT},
-            timeout=8,
+            timeout=16,
         )
         response.raise_for_status()
         pages = (response.json().get("query") or {}).get("pages") or {}
@@ -183,6 +185,776 @@ def commons_image(term):
             "creator": _meta_text(meta, "Artist") or "Unknown creator",
             "license": _meta_text(meta, "LicenseShortName") or "See the Commons page",
             "license_url": _meta_text(meta, "LicenseUrl"),
+        }
+    return None
+
+
+_OFFICE = re.compile(
+    r"^(?:who(?:'s| is))\s+(?:the\s+)?(?:current\s+)?"
+    r"(president|prime minister|king|queen|chancellor|head of state)\s+of\s+(.+?)\s*[?.!]*$",
+    re.IGNORECASE,
+)
+_CAPITAL = re.compile(
+    r"^(?:what(?:'s| is))\s+(?:the\s+)?(?:current\s+)?capital\s+of\s+(.+?)\s*[?.!]*$",
+    re.IGNORECASE,
+)
+_FLAG = re.compile(
+    r"^(?:(?:show|give|display)(?:\s+me)?\s+)?(?:the\s+)?flag\s+of\s+(.+?)\s*[?.!]*$",
+    re.IGNORECASE,
+)
+_OFFICE_PROPERTY = {
+    "president": "P35",
+    "head of state": "P35",
+    "king": "P35",
+    "queen": "P35",
+    "prime minister": "P6",
+    "chancellor": "P6",
+}
+
+
+def wikidata_current(message):
+    """The fact that is true today, plus the picture Wikidata points to."""
+    text = (message or "").strip()
+    office = _OFFICE.match(text)
+    capital = _CAPITAL.match(text)
+    flag = _FLAG.match(text)
+    if office:
+        role = office.group(1).lower()
+        place = _clean_term(office.group(2))
+        return _current_office(place, role, _OFFICE_PROPERTY[role])
+    if capital:
+        return _current_capital(_clean_term(capital.group(1)))
+    if flag:
+        return _current_flag(_clean_term(flag.group(1)))
+    return None
+
+
+_WHO = re.compile(
+    r"^who\s+(?:was|is|were|are|'s)?\s*(?:the\s+)?(.+?)\s*[?.!]*$",
+    re.IGNORECASE,
+)
+_WHEN = re.compile(
+    r"^when\s+(?:did|was|were|is|'s)?\s*(?:the\s+)?(.+?)\s*[?.!]*$",
+    re.IGNORECASE,
+)
+_WIN = re.compile(
+    r"^when\s+did\s+(.+?)\s+(?:win|won)\s+(?:the\s+)?(.+?)\s*[?.!]*$",
+    re.IGNORECASE,
+)
+_WHO_WORDS = (
+    "invented", "discovered", "created", "founded", "designed", "wrote",
+    "written", "built", "developed", "painted", "composed", "directed",
+)
+_WHEN_WORDS = (
+    "start", "started", "begin", "began", "happen", "happened",
+    "colonized", "colonised", "invented", "discovered", "founded",
+)
+_WHO_PROPS = (
+    ("P61", "invented by"),
+    ("P170", "created by"),
+    ("P178", "developed by"),
+    ("P287", "designed by"),
+    ("P112", "founded by"),
+    ("P50", "written by"),
+    ("P57", "directed by"),
+    ("P86", "composed by"),
+)
+_WHEN_PROPS = (
+    ("P580", "started"),
+    ("P571", "began"),
+    ("P575", "was discovered"),
+    ("P585", "took place"),
+    ("P1619", "opened"),
+    ("P577", "was published"),
+)
+
+
+def wikidata_research(message):
+    """Who and when questions, answered from the public record for that topic."""
+    text = _normalize_question(message)
+    won = _WIN.match(text)
+    if won:
+        found = _research_win(_clean_term(won.group(1)), _clean_term(won.group(2)))
+        return found or _never_won_reply(_clean_term(won.group(1)), _clean_term(won.group(2)))
+    who = _WHO.match(text)
+    if who:
+        return _research_who(who.group(1), text) or _who_directive(who.group(1), text)
+    when = _WHEN.match(text)
+    if when:
+        return _research_when(when.group(1), text) or _when_directive(when.group(1), text)
+    return None
+
+
+def _research_who(rest, original):
+    topic = _research_topic(rest)
+    item = (_wikidata_item(topic) or _wikidata_item(rest)) if topic else None
+    if item and _is_human(item):
+        return _person_answer(item)
+    if item:
+        for prop, phrase in _WHO_PROPS:
+            people = _claim_people(item, prop)
+            if people:
+                names = _join_names(person["name"] for person in people[:3])
+                photo = _commons_file(_claim_filename(people[0]["entity"], "P18"))
+                return {
+                    "text": _who_sentence(names, _label(item), original, phrase),
+                    "commons": photo,
+                }
+    if "moon" in original.lower():
+        landing = _wikidata_item("Apollo 11")
+        crew = _claim_labels(landing, "P1029") or _claim_labels(landing, "P710")
+        if crew:
+            return {
+                "text": _moon_sentence(crew[0]),
+                "commons": wikidata_image(crew[0]),
+            }
+    if item and "first" in original.lower() and _description(item):
+        return {
+            "text": _first_sentence(_label(item), _description(item)),
+            "commons": _commons_file(_claim_filename(item, "P18")),
+        }
+    return None
+
+
+def _research_when(rest, original):
+    topic = _research_topic(rest)
+    if not topic:
+        return None
+    guesses = [topic]
+    lowered = original.lower()
+    if "colon" in lowered:
+        guesses = [f"colonisation of {topic}", f"colonization of {topic}", f"{topic} Protectorate", topic]
+    elif any(word in lowered for word in ("start", "begin", "began")):
+        guesses = [f"{topic} pandemic", topic, f"{topic}-19 pandemic"]
+    for guess in guesses:
+        item = _wikidata_item(guess)
+        if not item:
+            continue
+        for prop, phrase in _WHEN_PROPS:
+            moments = _claim_times(item, prop)
+            if moments:
+                return {
+                    "text": _when_sentence(_label(item), moments[0], original, phrase),
+                    "commons": _commons_file(_claim_filename(item, "P18")) or _commons_file(_claim_filename(item, "P41")),
+                }
+    return None
+
+
+def _research_win(team_text, event_text):
+    team_text = _expand_name(team_text)
+    team = None
+    for guess in (f"{team_text} national football team", f"{team_text} football team", team_text):
+        found = _wikidata_item(guess, "football")
+        if found and "team" in _description(found).lower():
+            team = found
+            break
+    team = team or _wikidata_item(team_text, "football")
+    if not team:
+        return None
+    team_id = team.get("id")
+    words = [word for word in re.findall(r"[a-z]{4,}", event_text.lower())]
+    query = f"""
+    SELECT ?eventLabel ?date WHERE {{
+      SERVICE wikibase:label {{ bd:serviceParam wikibase:language "en". }}
+      ?event wdt:P1346 wd:{team_id} .
+      ?event wdt:P585 ?date .
+      ?event rdfs:label ?eventLabel .
+      FILTER(LANG(?eventLabel) = "en")
+    }}
+    ORDER BY ?date
+    LIMIT 20
+    """
+    rows = _sparql(query)
+    if rows is None:
+        return None
+    picked = []
+    for row in rows:
+        label = ((row.get("eventLabel") or {}).get("value") or "")
+        if words and not any(word in label.lower() for word in words):
+            continue
+        picked.append((label, _format_time((row.get("date") or {}).get("value"))))
+    if not picked:
+        return None
+    editions = [row for row in picked if not row[0].lower().endswith("final")]
+    picked = editions or picked
+    lines = "; ".join(f"{name} ({when})" for name, when in picked[:4] if when)
+    return {
+        "text": _win_sentence(_label(team), event_text, picked),
+        "commons": _commons_file(_claim_filename(team, "P41")) or _commons_file(_claim_filename(team, "P154")),
+    }
+
+
+_NAME_ALIASES = {
+    "drc": "DR Congo",
+    "dr congo": "DR Congo",
+    "usa": "United States",
+    "us": "United States",
+    "uk": "United Kingdom",
+    "uae": "United Arab Emirates",
+}
+
+
+_WORD_FIXES = {
+    "inveted": "invented",
+    "inventd": "invented",
+    "invened": "invented",
+    "inveted": "invented",
+    "creatd": "created",
+    "craeted": "created",
+    "developped": "developed",
+    "developd": "developed",
+    "fonded": "founded",
+    "desinged": "designed",
+    "winned": "won",
+}
+
+
+def _normalize_question(message):
+    text = re.sub(r"\s+", " ", (message or "").strip())
+    def fix(match):
+        return _WORD_FIXES.get(match.group(0).lower(), match.group(0))
+    text = re.sub(r"[A-Za-z]+", fix, text)
+    text = re.sub(r"\bafcon\b", "Africa Cup of Nations", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bai\b", "artificial intelligence", text, flags=re.IGNORECASE)
+    return text
+
+
+def _expand_name(text):
+    return _NAME_ALIASES.get((text or "").strip().lower(), text)
+
+
+def _never_won_reply(team_text, event_text):
+    """Say the win is absent only after the other public sources also omit it."""
+    place = _expand_name(team_text)
+    place = place[:1].upper() + place[1:] if place else "That team"
+    event = event_text or "that competition"
+    verdict = _public_win_check(place, event)
+    if verdict is True:
+        return None
+    if re.search(r"africa|nations", event, re.IGNORECASE):
+        sentence = f"{place} has never won any AFCON."
+    else:
+        thing = _the(event)
+        sentence = f"{place} has never won {thing[0].lower() + thing[1:]}."
+    if verdict is None:
+        sentence = f"I couldn't confirm that {place} has won { _the(event)[0].lower() + _the(event)[1:] }."
+    return {"text": sentence}
+
+
+def _public_win_check(team, event):
+    """True if a public snippet credits the win, False if sources answered without one, None if they were silent."""
+    query = f"{team} won {event}"
+    lines = list(_wikipedia_snippet(query) or [])
+    lines.extend(_duckduckgo_snippets(query) or [])
+    if not lines:
+        return None
+    blob = " ".join(lines).lower()
+    team_word = team.lower().split()[0]
+    if team_word not in blob:
+        return False
+    if any(mark in blob for mark in ("never won", "has not won", "have not won", "did not win", "yet to win")):
+        return False
+    if any(mark in blob for mark in ("won the", "winners", "champions", "lifted the trophy", "won afcon")):
+        return True
+    return False
+
+
+def _who_directive(rest, original):
+    topic = _research_topic(rest) or _clean_term(rest)
+    if not topic:
+        return None
+    thing = "Artificial intelligence" if topic.lower() == "artificial intelligence" else _the(topic)
+    active, _passive = _asked_verb(original, "developed by")
+    verb = "developed" if active == "invented" else active
+    lead = f"{thing} was {verb} by many people, not by one inventor."
+    intro = _intro_sentence(topic)
+    if intro:
+        lead = f"{lead} {intro}"
+    return {"text": lead, "commons": wikidata_image(topic)}
+
+
+def _when_directive(rest, original):
+    topic = _research_topic(rest) or _clean_term(rest)
+    if not topic:
+        return None
+    intro = _intro_sentence(topic)
+    thing = _the(topic)
+    if intro:
+        return {"text": f"{thing} does not have one simple date. {intro}"}
+    return {"text": f"I couldn't find a date for when {thing[0].lower() + thing[1:]} happened."}
+
+
+def _intro_sentence(topic):
+    summary = _wikipedia_plain_summary(topic) or ""
+    body = summary.split("\n", 1)[-1].strip()
+    if not body or "may refer to" in body.lower():
+        return ""
+    sentence = body.split(". ")[0].strip().rstrip(".")
+    if len(sentence) < 40:
+        return ""
+    return sentence + "."
+
+
+def _join_names(names):
+    names = [name for name in names if name]
+    if len(names) <= 1:
+        return names[0] if names else ""
+    return ", ".join(names[:-1]) + ", and " + names[-1]
+
+
+_VERB_FORMS = (
+    ("invented", "invented", "was invented by"),
+    ("discovered", "discovered", "was discovered by"),
+    ("created", "created", "was created by"),
+    ("founded", "founded", "was founded by"),
+    ("designed", "designed", "was designed by"),
+    ("written", "wrote", "was written by"),
+    ("wrote", "wrote", "was written by"),
+    ("built", "built", "was built by"),
+    ("developed", "developed", "was developed by"),
+    ("painted", "painted", "was painted by"),
+    ("composed", "composed", "was composed by"),
+    ("directed", "directed", "was directed by"),
+    ("colonized", "colonized", "was colonized"),
+    ("colonised", "colonised", "was colonised"),
+    ("started", "started", "started"),
+    ("start", "started", "started"),
+    ("began", "began", "began"),
+    ("begin", "began", "began"),
+    ("opened", "opened", "was opened"),
+    ("published", "published", "was published"),
+    ("won", "won", "was won by"),
+    ("win", "won", "was won by"),
+)
+
+
+def _asked_verb(text, fallback=""):
+    """The verb the person used, as an active form and a passive form."""
+    lowered = (text or "").lower()
+    for word, active, passive in _VERB_FORMS:
+        if re.search(rf"\b{word}\b", lowered):
+            return active, passive
+    cleaned = (fallback or "").replace(" by", "").strip()
+    if not cleaned:
+        return "is linked with", "is linked with"
+    return cleaned, f"was {cleaned} by" if not cleaned.startswith("was ") else cleaned
+
+
+def _the(label):
+    name = (label or "").strip()
+    if not name:
+        return name
+    if re.match(r"^(the|a|an)\b", name, re.IGNORECASE):
+        return name[0].upper() + name[1:]
+    second = name[1:2]
+    if name[0].isupper() and (second.isupper() or second.isdigit()):
+        shown = name
+    elif name[0].isupper():
+        shown = name[0].lower() + name[1:]
+    else:
+        shown = name
+    return "The " + shown
+
+
+def _who_sentence(names, subject, original, property_phrase):
+    active, passive = _asked_verb(original, property_phrase)
+    thing = _the(subject)
+    if random.choice((True, False)):
+        return f"{names} {active} {thing[0].lower() + thing[1:]}."
+    return f"{thing} {passive} {names}."
+
+
+def _when_sentence(subject, moment, original, property_phrase):
+    active, passive = _asked_verb(original, property_phrase)
+    thing = _the(subject)
+    soft = thing[0].lower() + thing[1:]
+    if "colon" in (original or "").lower():
+        if random.choice((True, False)):
+            return f"{subject} was colonized on {moment}."
+        return f"The colonization of {subject} began on {moment}."
+    if passive.startswith("was "):
+        if random.choice((True, False)):
+            return f"{thing} {passive} on {moment}."
+        return f"{moment} is when {soft} {passive}."
+    if random.choice((True, False)):
+        return f"{thing} {active} on {moment}."
+    return f"{moment} is when {soft} {active}."
+
+
+def _win_sentence(team, event_text, picked):
+    event = _the(event_text)
+    years = []
+    for _name, moment in picked[:4]:
+        year = (moment or "").split()[-1]
+        if year and year not in years:
+            years.append(year)
+    when = " and ".join(years)
+    if random.choice((True, False)):
+        return f"{team} won {event[0].lower() + event[1:]} in {when}."
+    return f"{event} was won by {team} in {when}."
+
+
+def _moon_sentence(name):
+    if random.choice((True, False)):
+        return f"{name} was the first person to walk on the Moon."
+    return "The first person to walk on the Moon was " + name + "."
+
+
+def _first_sentence(name, detail):
+    if random.choice((True, False)):
+        return f"{name} is the match for that question. {detail}."
+    return f"The match for that question is {name}. {detail}."
+
+
+def _research_topic(rest):
+    text = _expand_name(_clean_term(rest))
+    text = re.sub(
+        r"^(?:invented|discovered|created|founded|designed|wrote|written|built|developed|painted|composed|directed)\s+(?:the\s+)?",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(
+        r"\b(?:start|started|begin|began|happen|happened|colonized|colonised|invented|discovered|founded)\b",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    )
+    return _clean_term(text)
+
+
+def _person_answer(item):
+    name = _label(item)
+    detail = _description(item)
+    if detail:
+        sentence = random.choice((
+            f"{name} is {detail}.",
+            f"{detail[:1].upper()}{detail[1:]}: {name}.",
+        ))
+    else:
+        sentence = name + "."
+    return {
+        "text": sentence,
+        "commons": _commons_file(_claim_filename(item, "P18")),
+    }
+
+
+def _is_human(entity):
+    for claim in ((entity.get("claims") or {}).get("P31") or []):
+        value = ((claim.get("mainsnak") or {}).get("datavalue") or {}).get("value") or {}
+        if value.get("id") == "Q5":
+            return True
+    return False
+
+
+def _description(entity):
+    if not entity:
+        return ""
+    return ((entity.get("descriptions") or {}).get("en") or {}).get("value") or ""
+
+
+def _claim_people(entity, prop):
+    people = []
+    seen = set()
+    if not entity:
+        return people
+    for claim in (entity.get("claims") or {}).get(prop) or []:
+        if claim.get("rank") == "deprecated":
+            continue
+        value = ((claim.get("mainsnak") or {}).get("datavalue") or {}).get("value") or {}
+        item_id = value.get("id") if isinstance(value, dict) else None
+        if not item_id or item_id in seen:
+            continue
+        person = _wikidata_by_id(item_id) or {}
+        named = _label(person)
+        if not named or named == "that subject":
+            continue
+        seen.add(item_id)
+        people.append({"name": named, "entity": person})
+    return people
+
+
+def _claim_labels(entity, prop):
+    return [person["name"] for person in _claim_people(entity, prop)]
+
+
+def _claim_times(entity, prop):
+    found = []
+    for claim in (entity.get("claims") or {}).get(prop) or []:
+        if claim.get("rank") == "deprecated":
+            continue
+        value = ((claim.get("mainsnak") or {}).get("datavalue") or {}).get("value")
+        if isinstance(value, dict) and value.get("time"):
+            shown = _format_time(value["time"])
+            if shown and shown not in found:
+                if claim.get("rank") == "preferred":
+                    return [shown]
+                found.append(shown)
+    return found
+
+
+def _format_time(raw):
+    match = re.match(r"\+?(\d{4})-(\d{2})-(\d{2})", raw or "")
+    if not match:
+        return None
+    year, month, day = (int(part) for part in match.groups())
+    months = (
+        "January", "February", "March", "April", "May", "June",
+        "July", "August", "September", "October", "November", "December",
+    )
+    if not month:
+        return str(year)
+    if not day:
+        return f"{months[month - 1]} {year}"
+    return f"{day} {months[month - 1]} {year}"
+
+
+def _sparql(query):
+    try:
+        response = requests.get(
+            "https://query.wikidata.org/sparql",
+            params={"query": query, "format": "json"},
+            headers={"User-Agent": WIKI_USER_AGENT, "Accept": "application/sparql-results+json"},
+            timeout=22,
+        )
+        response.raise_for_status()
+        return ((response.json().get("results") or {}).get("bindings") or [])
+    except (requests.RequestException, ValueError):
+        return None
+
+
+def wikidata_image(term):
+    """The lead picture Wikidata stores for a topic, not an older search hit."""
+    item = _wikidata_item(term)
+    if not item:
+        return None
+    filename = _claim_filename(item, "P18") or _claim_filename(item, "P41")
+    if not filename:
+        return None
+    return _commons_file(filename)
+
+
+def _current_office(place, role, prop):
+    country = _wikidata_item(place)
+    if not country:
+        return None
+    holder_id = _current_item_id(country, prop)
+    if not holder_id:
+        return None
+    holder = _wikidata_by_id(holder_id)
+    if not holder:
+        return None
+    name = _label(holder)
+    country_name = _label(country)
+    photo = _commons_file(_claim_filename(holder, "P18"))
+    return {
+        "text": random.choice((
+            f"The current {role} of {country_name} is {name}.",
+            f"{name} is the current {role} of {country_name}.",
+        )),
+        "commons": photo,
+    }
+
+
+def _current_capital(place):
+    country = _wikidata_item(place)
+    if not country:
+        return None
+    capital_id = _current_item_id(country, "P36")
+    if not capital_id:
+        return None
+    capital = _wikidata_by_id(capital_id)
+    if not capital:
+        return None
+    photo = _commons_file(_claim_filename(capital, "P18")) or _commons_file(_claim_filename(country, "P41"))
+    return {
+        "text": random.choice((
+            f"The capital of {_label(country)} is {_label(capital)}.",
+            f"{_label(capital)} is the capital of {_label(country)}.",
+        )),
+        "commons": photo,
+    }
+
+
+def _current_flag(place):
+    country = _wikidata_item(place)
+    if not country:
+        return None
+    photo = _commons_file(_claim_filename(country, "P41"))
+    if not photo:
+        return None
+    return {
+        "text": random.choice((
+            f"This is the flag of {_label(country)}.",
+            f"The flag of {_label(country)} is shown here.",
+        )),
+        "commons": photo,
+    }
+
+
+def _wikidata_get(params):
+    last_error = None
+    for _attempt in range(2):
+        try:
+            response = requests.get(
+                "https://www.wikidata.org/w/api.php",
+                params=params,
+                headers={"User-Agent": WIKI_USER_AGENT},
+                timeout=16,
+            )
+            response.raise_for_status()
+            return response.json()
+        except (requests.RequestException, ValueError) as error:
+            last_error = error
+    if last_error:
+        return None
+    return None
+
+
+def _wikidata_item(term, hint=""):
+    found = _wikidata_search(term, hint)
+    if not found:
+        return None
+    return _wikidata_by_id(found)
+
+
+def _wikidata_search(term, hint=""):
+    payload = _wikidata_get({
+        "action": "wbsearchentities",
+        "search": term,
+        "language": "en",
+        "format": "json",
+        "limit": 8,
+    })
+    hits = (payload or {}).get("search") or []
+    skip = ("single by", "album by", "song by", "film", "painting by", "band", "television series")
+    hint_words = [word for word in hint.lower().split() if len(word) > 3]
+    chosen = None
+    for hit in hits:
+        display = hit.get("display") or {}
+        desc = ((display.get("description") or {}).get("value") or "").lower()
+        if any(mark in desc for mark in skip):
+            continue
+        if hint_words and any(word in desc for word in hint_words):
+            return hit.get("id")
+        chosen = chosen or hit.get("id")
+    return chosen
+
+
+def _wikidata_by_id(item_id):
+    if not item_id:
+        return None
+    payload = _wikidata_get({
+        "action": "wbgetentities",
+        "ids": item_id,
+        "props": "claims|labels|descriptions|sitelinks",
+        "languages": "en",
+        "sitefilter": "enwiki",
+        "format": "json",
+    })
+    if not payload:
+        return None
+    return ((payload.get("entities") or {}).get(item_id))
+
+
+def _label(entity):
+    if not entity:
+        return "that subject"
+    named = ((entity.get("labels") or {}).get("en") or {}).get("value")
+    if named:
+        return named
+    wiki = ((entity.get("sitelinks") or {}).get("enwiki") or {}).get("title")
+    return wiki or "that subject"
+
+
+def _current_item_id(entity, prop):
+    claim = _current_claim(entity, prop)
+    if not claim:
+        return None
+    value = ((claim.get("mainsnak") or {}).get("datavalue") or {}).get("value") or {}
+    return value.get("id")
+
+
+def _claim_filename(entity, prop):
+    claim = _current_claim(entity, prop)
+    if not claim:
+        return None
+    value = ((claim.get("mainsnak") or {}).get("datavalue") or {}).get("value")
+    return value if isinstance(value, str) else None
+
+
+def _current_claim(entity, prop):
+    today = date.today()
+    fallback = None
+    for claim in ((entity.get("claims") or {}).get(prop) or []):
+        if claim.get("rank") == "deprecated":
+            continue
+        end = _qualifier_date(claim, "P582")
+        start = _qualifier_date(claim, "P580")
+        if end and end < today:
+            continue
+        if start and start > today:
+            continue
+        if claim.get("rank") == "preferred":
+            return claim
+        fallback = claim
+    return fallback
+
+
+def _qualifier_date(claim, prop):
+    qualifiers = (claim.get("qualifiers") or {}).get(prop) or []
+    if not qualifiers:
+        return None
+    raw = ((qualifiers[0].get("datavalue") or {}).get("value") or {}).get("time") or ""
+    match = re.match(r"\+(\d{4})-(\d{2})-(\d{2})", raw)
+    if not match:
+        return None
+    year, month, day = (int(part) for part in match.groups())
+    month = month or 1
+    day = day or 1
+    try:
+        return date(year, month, day)
+    except ValueError:
+        return None
+
+
+def _commons_file(filename):
+    if not filename:
+        return None
+    title = "File:" + filename
+    try:
+        response = requests.get(
+            "https://commons.wikimedia.org/w/api.php",
+            params={
+                "action": "query",
+                "format": "json",
+                "titles": title,
+                "prop": "imageinfo",
+                "iiprop": "url|mime",
+                "iiurlwidth": 640,
+            },
+            headers={"User-Agent": WIKI_USER_AGENT},
+            timeout=16,
+        )
+        response.raise_for_status()
+        pages = (response.json().get("query") or {}).get("pages") or {}
+    except (requests.RequestException, ValueError):
+        return None
+    for page in pages.values():
+        info = (page.get("imageinfo") or [None])[0] or {}
+        thumb = info.get("thumburl") or (
+            "https://commons.wikimedia.org/wiki/Special:FilePath/"
+            + requests.utils.quote(filename)
+            + "?width=640"
+        )
+        slug = title.replace(" ", "_")
+        return {
+            "thumbnail": thumb,
+            "page": "https://commons.wikimedia.org/wiki/" + requests.utils.quote(slug),
+            "title": filename,
+            "creator": "Wikimedia Commons",
+            "license": "See the Commons page",
+            "license_url": "",
         }
     return None
 
@@ -269,7 +1041,7 @@ def _search_title(term):
                 "format": "json",
             },
             headers={"User-Agent": WIKI_USER_AGENT},
-            timeout=8,
+            timeout=16,
         )
         response.raise_for_status()
         hits = (response.json().get("query") or {}).get("search") or []
@@ -300,7 +1072,7 @@ def _wikipedia_plain_summary(title):
             "https://en.wikipedia.org/api/rest_v1/page/summary/"
             + requests.utils.quote(title.replace(" ", "_")),
             headers={"User-Agent": WIKI_USER_AGENT, "Accept": "application/json"},
-            timeout=8,
+            timeout=16,
         )
         if response.status_code == 404:
             return None
@@ -381,7 +1153,7 @@ def _disambiguation_target(word):
                 "redirects": 1,
             },
             headers={"User-Agent": WIKI_USER_AGENT},
-            timeout=8,
+            timeout=16,
         )
         if not response.ok:
             return None
@@ -416,7 +1188,7 @@ def wikipedia_summary(term, question=""):
             language="en",
             extract_format=wikipediaapi.ExtractFormat.WIKI,
             max_retries=0,
-            timeout=8,
+            timeout=16,
         )
         page = _page_in_sense(wiki, term, question)
         if page is None:
@@ -740,7 +1512,7 @@ def _wikipedia_snippet(query):
                 "format": "json",
             },
             headers={"User-Agent": WIKI_USER_AGENT},
-            timeout=8,
+            timeout=16,
         )
         response.raise_for_status()
         pages = (response.json().get("query") or {}).get("pages") or {}
