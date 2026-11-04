@@ -2,6 +2,7 @@
 
 import base64
 import binascii
+import os
 import re
 import struct
 import subprocess
@@ -44,8 +45,11 @@ def interpret_image(file, question=""):
         return {"response": reply, "lines": "\n".join(texts)}
     pixels, width, height = decoded
     intent = _intent(question)
-    if intent != "text":
-        seen = _yolo_reading(raw, pixels, width, height)
+    if intent != "text" and os.getenv("YOLO_ENABLED", "1") != "0":
+        try:
+            seen = _yolo_reading(raw, pixels, width, height)
+        except Exception:
+            seen = ""
         if seen:
             return {"response": seen, "lines": ""}
     lines = []

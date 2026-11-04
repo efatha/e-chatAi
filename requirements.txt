@@ -7,4 +7,5 @@ wikipedia-api==0.16.0 # used by retained optional Wikipedia lookup agent
 python-dotenv==1.0.0 # load local environment settings
 flask-cors==4.0.0    # if frontend is hosted separately
 # Pillow is optional. PNG images are read without it; JPEG also works when Pillow is installed.
-ultralytics  # local YOLO person and object detection, AGPL-3.0, no per-request fee
+# YOLO stays off the free host. PyTorch is larger than that machine's memory.
+# This computer already has ultralytics installed, and YOLO_ENABLED=0 turns it off.
