@@ -209,7 +209,9 @@ class BookAgent:
         }
         concept = _semantic_concept(message)
         concept_key, concept_groups = concept if concept else (None, ())
-        expanded_query = set(query)
+        related = _related_terms(query)
+        intent = _question_intent(message)
+        expanded_query = set(query) | related
         for group in concept_groups:
             for phrase in group:
                 expanded_query.update(_tokens(phrase))
@@ -238,12 +240,16 @@ class BookAgent:
                     if concept_hits < 2:
                         continue
                 elif important and not (important & chunk_tokens):
-                    continue
-                elif query and len(query & chunk_tokens) < min(2, len(query)):
+                    if len(related & chunk_tokens) < 2:
+                        continue
+                elif query and len((query | related) & chunk_tokens) < min(2, len(query)):
                     continue
                 direct_hits = len(query & chunk_tokens)
+                related_hits = len(related & chunk_tokens)
                 score = _tfidf(expanded_query, chunk_tokens, self._idf)
                 score += 2.5 * direct_hits
+                score += 1.2 * related_hits
+                score += _intent_bonus(intent, chunk_tokens)
                 if concept_groups:
                     score += 3 * concept_hits
                 if any(token in chunk_tokens for token in ("definition", "theorem", "means")):
@@ -352,6 +358,72 @@ def _casual_talk(text):
 def _tokens(text):
     words = re.findall(r"[a-zA-Z][a-zA-Z0-9']{2,}", (text or "").lower())
     return {word for word in words if word not in STOPWORDS}
+
+
+_RELATED = {
+    "average": ("mean", "arithmetic"),
+    "mean": ("average", "expected"),
+    "chance": ("probability", "likelihood"),
+    "probability": ("chance", "likelihood"),
+    "likely": ("probability", "chance"),
+    "spread": ("variance", "deviation"),
+    "variance": ("spread", "deviation"),
+    "difference": ("compare", "contrast", "versus"),
+    "compare": ("difference", "contrast", "versus"),
+    "contrast": ("difference", "compare"),
+    "example": ("instance", "illustration"),
+    "instance": ("example", "illustration"),
+    "define": ("definition", "means"),
+    "definition": ("defined", "means"),
+    "meaning": ("definition", "means"),
+    "prove": ("proof", "theorem"),
+    "proof": ("prove", "theorem"),
+    "cause": ("because", "therefore"),
+    "because": ("therefore", "cause"),
+    "method": ("procedure", "steps"),
+    "steps": ("method", "procedure"),
+    "belief": ("posterior", "prior"),
+    "evidence": ("likelihood", "posterior"),
+}
+
+
+def _related_terms(query):
+    related = set()
+    for token in query:
+        related.update(_RELATED.get(token, ()))
+        if token.endswith("s") and len(token) > 4:
+            related.add(token[:-1])
+    return related - query
+
+
+def _question_intent(message):
+    lowered = (message or "").lower()
+    if re.search(r"\b(define|definition|meaning of|what does|what is meant)\b", lowered):
+        return "definition"
+    if re.search(r"\b(example|for instance|show me a case)\b", lowered):
+        return "example"
+    if re.search(r"\b(compare|difference|versus|better than|worse than)\b", lowered):
+        return "comparison"
+    if re.search(r"\b(how do i|how to|steps|method|procedure)\b", lowered):
+        return "instruction"
+    if re.search(r"\b(prove|proof|evidence|why|show that)\b", lowered):
+        return "evidence"
+    return "explanation"
+
+
+_INTENT_MARKERS = {
+    "definition": ("definition", "defined", "means", "called"),
+    "example": ("example", "instance", "illustration"),
+    "comparison": ("difference", "compare", "whereas", "unlike", "versus"),
+    "instruction": ("step", "method", "procedure", "first"),
+    "evidence": ("therefore", "theorem", "proof", "because", "shows"),
+    "explanation": ("because", "means", "therefore"),
+}
+
+
+def _intent_bonus(intent, chunk_tokens):
+    markers = _INTENT_MARKERS.get(intent) or ()
+    return 1.5 if any(marker in chunk_tokens for marker in markers) else 0
 
 
 def _semantic_concept(message):
@@ -577,7 +649,7 @@ def _speak(text, habit, passages):
 
 
 def _evidence_answer(passages):
-    lines = ["The closest matching evidence in the local books is:"]
+    lines = ["The closest passage in the local books, matched by the idea of the question as well as its words, is:"]
     lines.extend(
         f"• _{title}, p. {page}_: {snippet}"
         for title, page, snippet in passages
