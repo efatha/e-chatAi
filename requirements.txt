@@ -6,6 +6,7 @@ requests==2.34.2      # used by retained optional provider/lookup agents
 wikipedia-api==0.16.0 # used by retained optional Wikipedia lookup agent
 python-dotenv==1.0.0 # load local environment settings
 flask-cors==4.0.0    # if frontend is hosted separately
-# Pillow is optional. PNG images are read without it; JPEG also works when Pillow is installed.
-# YOLO stays off the free host. PyTorch is larger than that machine's memory.
-# This computer already has ultralytics installed, and YOLO_ENABLED=0 turns it off.
+# Pillow opens JPEG photos on the free host. The ONNX file is the same small
+# detector used locally, without the PyTorch library that exceeds that host's memory.
+pillow
+onnxruntime

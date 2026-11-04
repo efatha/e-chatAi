@@ -66,6 +66,111 @@ def interpret_image(file, question=""):
     return {"response": reply, "lines": "\n".join(texts)}
 
 
+_YOLO_SESSION = None
+_COCO_NAMES = (
+    "person", "bicycle", "car", "motorcycle", "airplane", "bus", "train", "truck", "boat",
+    "traffic light", "fire hydrant", "stop sign", "parking meter", "bench", "bird", "cat",
+    "dog", "horse", "sheep", "cow", "elephant", "bear", "zebra", "giraffe", "backpack",
+    "umbrella", "handbag", "tie", "suitcase", "frisbee", "skis", "snowboard", "sports ball",
+    "kite", "baseball bat", "baseball glove", "skateboard", "surfboard", "tennis racket",
+    "bottle", "wine glass", "cup", "fork", "knife", "spoon", "bowl", "banana", "apple",
+    "sandwich", "orange", "broccoli", "carrot", "hot dog", "pizza", "donut", "cake", "chair",
+    "couch", "potted plant", "bed", "dining table", "toilet", "tv", "laptop", "mouse",
+    "remote", "keyboard", "cell phone", "microwave", "oven", "toaster", "sink",
+    "refrigerator", "book", "clock", "vase", "scissors", "teddy bear", "hair drier",
+    "toothbrush",
+)
+
+
+def _onnx_session():
+    """The small detector file. It runs where the full PyTorch package does not fit."""
+    global _YOLO_SESSION
+    if _YOLO_SESSION is False:
+        return None
+    if _YOLO_SESSION is not None:
+        return _YOLO_SESSION
+    weight = Path(__file__).resolve().parent.parent / "yolo11n.onnx"
+    if not weight.exists():
+        _YOLO_SESSION = False
+        return None
+    try:
+        import onnxruntime as ort
+        options = ort.SessionOptions()
+        options.intra_op_num_threads = 1
+        options.inter_op_num_threads = 1
+        _YOLO_SESSION = ort.InferenceSession(str(weight), sess_options=options, providers=["CPUExecutionProvider"])
+    except Exception:
+        _YOLO_SESSION = False
+        return None
+    return _YOLO_SESSION
+
+
+def _onnx_detections(image):
+    session = _onnx_session()
+    if session is None:
+        return None
+    try:
+        import numpy as np
+        from PIL import Image
+    except ImportError:
+        return None
+    size = 640
+    width, height = image.size
+    scale = min(size / width, size / height)
+    resized = image.resize((max(1, int(round(width * scale))), max(1, int(round(height * scale)))))
+    canvas = Image.new("RGB", (size, size), (114, 114, 114))
+    pad_x = (size - resized.size[0]) // 2
+    pad_y = (size - resized.size[1]) // 2
+    canvas.paste(resized, (pad_x, pad_y))
+    array = np.asarray(canvas, dtype=np.float32) / 255.0
+    array = array.transpose(2, 0, 1)[None]
+    output = session.run(None, {session.get_inputs()[0].name: array})[0]
+    rows = output[0]
+    if rows.shape[0] == 84:
+        rows = rows.T
+    boxes = []
+    scores = []
+    labels = []
+    for row in rows:
+        class_scores = row[4:]
+        class_id = int(class_scores.argmax())
+        score = float(class_scores[class_id])
+        if score < 0.35 or class_id >= len(_COCO_NAMES):
+            continue
+        cx, cy, bw, bh = (float(value) for value in row[:4])
+        x1 = (cx - bw / 2 - pad_x) / scale
+        y1 = (cy - bh / 2 - pad_y) / scale
+        x2 = (cx + bw / 2 - pad_x) / scale
+        y2 = (cy + bh / 2 - pad_y) / scale
+        boxes.append([x1, y1, x2, y2])
+        scores.append(score)
+        labels.append(_COCO_NAMES[class_id])
+    if not boxes:
+        return []
+    order = sorted(range(len(scores)), key=scores.__getitem__, reverse=True)
+    kept = []
+    while order:
+        current = order.pop(0)
+        kept.append(current)
+        remain = []
+        ax1, ay1, ax2, ay2 = boxes[current]
+        area_a = max(0, ax2 - ax1) * max(0, ay2 - ay1)
+        for other in order:
+            if labels[other] != labels[current]:
+                remain.append(other)
+                continue
+            bx1, by1, bx2, by2 = boxes[other]
+            ix1, iy1 = max(ax1, bx1), max(ay1, by1)
+            ix2, iy2 = min(ax2, bx2), min(ay2, by2)
+            inter = max(0, ix2 - ix1) * max(0, iy2 - iy1)
+            area_b = max(0, bx2 - bx1) * max(0, by2 - by1)
+            union = area_a + area_b - inter
+            if union <= 0 or inter / union < 0.45:
+                remain.append(other)
+        order = remain
+    return [(labels[index], boxes[index]) for index in kept]
+
+
 _YOLO_MODEL = None
 
 
@@ -127,32 +232,33 @@ def _yolo_reading(raw, pixels, width, height):
     if kind == "statue":
         return "This image shows a statue in a human pose. It is not a person."
     model = _yolo_model()
-    if model is None:
-        return ""
     try:
         from io import BytesIO
         from PIL import Image
         image = Image.open(BytesIO(raw)).convert("RGB")
     except Exception:
         return ""
-    try:
-        found = model.predict(image, verbose=False, conf=0.35, imgsz=640)
-    except Exception:
-        return ""
-    if not found:
-        return ""
-    boxes = found[0].boxes
-    if boxes is None or len(boxes) == 0:
-        return ""
-    names = found[0].names or {}
+    detected = _onnx_detections(image)
     people = []
     objects = []
-    for box in boxes:
-        label = names.get(int(box.cls[0]), "")
+    if detected is None and model is not None:
+        try:
+            found = model.predict(image, verbose=False, conf=0.35, imgsz=640)
+        except Exception:
+            found = None
+        boxes = found[0].boxes if found else None
+        names = (found[0].names or {}) if found else {}
+        if boxes is not None:
+            detected = []
+            for box in boxes:
+                label = names.get(int(box.cls[0]), "")
+                if label:
+                    detected.append((label.replace("_", " "), box.xyxy[0].tolist()))
+    for label, box in detected or []:
         if label == "person":
-            people.append(box.xyxy[0].tolist())
+            people.append(box)
         elif label:
-            objects.append(label.replace("_", " "))
+            objects.append(label)
     outfits = []
     for box in people[:4]:
         top = _region_cloth(image, box, 0.18, 0.48)
