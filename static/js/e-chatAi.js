@@ -253,6 +253,12 @@ const renderTranslation = (card) => {
   return root;
 };
 
+const paintDefinition = (text) => {
+  const escaped = escapeHtml(String(text || "")).replace(/\n/g, "<br>");
+  return escaped.replace(/(^|<br>|[.!?]\s*)- ([^<]+)/, (all, lead, body) =>
+    `${lead}<span class="def-lead">- ${body}</span>`);
+};
+
 const renderStoredMessage = (item) => {
   if (!item || !["user", "assistant"].includes(item.role)) return;
   const classes = item.role === "user" ? "user-message" : "bot-message";
@@ -261,7 +267,7 @@ const renderStoredMessage = (item) => {
     : "";
   const body = /\[[^\]]+\]\(https?:\/\//.test(String(item.content || ""))
     ? formatMarked(String(item.content || ""))
-    : escapeHtml(String(item.content || "")).replace(/\n/g, "<br>");
+    : paintDefinition(item.content || "");
   const element = createMsgElement(
     `${avatar}<div class="message-text">${body}</div>`,
     classes
@@ -533,7 +539,7 @@ const generateEchatResponse = async (incomingMsgDiv, conversationId, sentMessage
           msgElement.style.color = "#fff8f2";
         }
       } else {
-        msgElement.innerText = data.response;
+        msgElement.innerHTML = paintDefinition(data.response);
         if (data.source === "independent") {
           msgElement.style.backgroundColor = "#397d92";
           msgElement.style.color = "#fff8f2";

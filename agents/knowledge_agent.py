@@ -1763,6 +1763,12 @@ _WHAT_IN_LANG = re.compile(
 def translate_reply(message):
     """Translate a word, expression, or passage into only the languages asked for."""
     text = re.sub(r"\s+", " ", (message or "")).strip()
+    text = (
+        text.replace("“", "\"")
+        .replace("”", "\"")
+        .replace("‘", "'")
+        .replace("’", "'")
+    )
     parsed = _parse_translation_request(text)
     if not parsed:
         return None
@@ -1857,7 +1863,7 @@ def _word_translation(phrase, codes):
         if not translated:
             lines.append(_marked(label, "I couldn't confirm this."))
             continue
-        shown = translated[:1].upper() + translated[1:]
+        shown = translated
         lines.append(_marked(label, shown))
         if card is None:
             card = _word_card(phrase, code, translated)
@@ -1869,17 +1875,23 @@ def _word_translation(phrase, codes):
 
 def _word_card(phrase, code, translated):
     entry = wiktionary_entry(phrase) if " " not in phrase.strip() else None
-    role = ""
-    if entry:
-        role = ((entry.get("senses") or [{}])[0].get("part") or "").lower()
-    verb = role == "verb" and code in {"fr", "es"}
+    parts = [(sense.get("part") or "").lower() for sense in (entry.get("senses") or [])] if entry else []
+    verb = _is_infinitive(translated, code)
+    if verb:
+        role = "verb"
+    elif "adjective" in parts:
+        role = "adjective"
+    elif parts and parts[0] != "verb":
+        role = parts[0]
+    else:
+        role = "word"
     rows = _present_rows(code, translated, phrase) if verb else []
     return {
         "language": _language_label(code).lower(),
         "word": translated,
         "kind": "verb" if verb else (role or "word"),
         "rows": rows,
-        "examples": _usage_examples(code, translated, phrase, verb, rows),
+        "examples": _usage_examples(code, translated, phrase, verb, rows, role),
     }
 
 
@@ -2091,13 +2103,25 @@ def _spanish_command(verb):
     return _COMMAND_CACHE.get(("es", verb), "")
 
 
+def _is_infinitive(word, code):
+    text = (word or "").strip().lower()
+    if " " in text or code not in {"fr", "es"}:
+        return False
+    if code == "fr":
+        return text.endswith(("er", "ir", "re", "oir"))
+    return text.endswith(("ar", "er", "ir"))
+
+
 def _english_forms(word):
     base = word.lower().removeprefix("to ").strip()
     third = base + ("es" if base.endswith(("s", "sh", "ch", "x", "o")) else "s")
     return (base, base, third, base, base, base)
 
 
-def _usage_examples(code, infinitive, phrase, verb, rows):
+def _usage_examples(code, infinitive, phrase, verb, rows, role=""):
+    real = _tatoeba_examples(phrase, code)
+    if real:
+        return real
     word = (infinitive or "").strip()
     if verb and word:
         gift = _google_translate("a gift", code)
@@ -2121,19 +2145,90 @@ def _usage_examples(code, infinitive, phrase, verb, rows):
                 "meaning": f"{phrase[:1].upper() + phrase[1:]} me that!",
             })
         return examples
+    if " " in (phrase or "").strip() or " " in (infinitive or "").strip():
+        return []
     examples = []
-    for prompt in (f"a {phrase}", f"the {phrase}", f"my {phrase}"):
+    prompts = (f"she is {phrase}", f"a {phrase} person") if role == "adjective" else (f"a {phrase}", f"the {phrase}")
+    for prompt in prompts:
         line = _google_translate(prompt, code)
-        if line:
+        if line and _plain_letters(line) != _plain_letters(prompt):
             examples.append({"phrase": line, "meaning": prompt[:1].upper() + prompt[1:]})
     return examples
 
 
+_TATOEBA = {
+    "en": "eng", "fr": "fra", "es": "spa", "sw": "swh", "ar": "ara",
+    "rw": "kin", "de": "deu", "pt": "por", "it": "ita", "zh": "cmn",
+    "ja": "jpn", "ko": "kor", "hi": "hin", "ln": "lin", "lg": "lug",
+    "rn": "run", "nl": "nld", "ru": "rus", "tr": "tur",
+}
+
+
+def _example_uses(sentence, query):
+    """An example counts only when the sentence actually uses the looked-up words."""
+    text = re.sub(r"[^a-z0-9]+", " ", (sentence or "").lower()).strip()
+    wanted = re.sub(r"[^a-z0-9]+", " ", (query or "").lower()).strip()
+    if not text or not wanted:
+        return False
+    if " " in wanted:
+        return wanted in text
+    return bool(re.search(rf"(^| ){re.escape(wanted)}( |$)", text))
+
+
+def _tatoeba_examples(phrase, code, limit=3):
+    """Real sentence pairs from Tatoeba for the common-examples list."""
+    target = _TATOEBA.get(code)
+    query = (phrase or "").strip()
+    if not target or not query:
+        return []
+    try:
+        response = requests.get(
+            "https://api.tatoeba.org/unstable/sentences",
+            params={
+                "lang": "eng",
+                "q": query,
+                "showtrans": "all",
+                "sort": "relevance",
+                "limit": 20,
+            },
+            headers={"User-Agent": WIKI_USER_AGENT},
+            timeout=15,
+        )
+        response.raise_for_status()
+        results = response.json().get("data") or []
+    except (requests.RequestException, ValueError, TypeError):
+        return []
+    examples = []
+    for item in results:
+        english = (item.get("text") or "").strip()
+        if not english or not _example_uses(english, query):
+            continue
+        chosen = ""
+        direct = ""
+        for sentence in item.get("translations") or []:
+            if not isinstance(sentence, dict) or sentence.get("lang") != target:
+                continue
+            text = (sentence.get("text") or "").strip()
+            if not text:
+                continue
+            if sentence.get("is_direct"):
+                direct = text
+                break
+            if not chosen:
+                chosen = text
+        line = direct or chosen
+        if line:
+            examples.append({"phrase": line, "meaning": english})
+        if len(examples) >= limit:
+            break
+    return examples
+
+
 def _unwrap_quotes(phrase):
-    text = (phrase or "").strip()
-    if len(text) >= 2 and text[0] == text[-1] and text[0] in "\"'“”":
-        return text[1:-1].strip()
-    return text
+    text = (phrase or "").strip().replace("“", "\"").replace("”", "\"").replace("‘", "'").replace("’", "'")
+    while len(text) >= 2 and text[0] == text[-1] and text[0] in "\"'":
+        text = text[1:-1].strip()
+    return text.strip(" \"'`")
 
 
 def _sentence_words(phrase):
@@ -2142,50 +2237,57 @@ def _sentence_words(phrase):
 
 def _sentence_translation(phrase, codes):
     """The sentence as a whole, in each language the user named."""
-    english = _natural_english(phrase)
-    idiom = _plain_letters(english) != _plain_letters(phrase)
+    english = _sentence_meaning(phrase)
     lines = []
-    if idiom:
-        lines.append(_marked("Expression", phrase))
-        lines.append(_marked("Meaning", english.rstrip(".")))
+    result_card_word = ""
     for code in codes:
         label = _language_label(code)
         if code == "en":
             shown = english
         else:
-            shown = _sentence_case(_google_translate(phrase, code) or "")
-        if not shown:
+            shown = _google_text(english.rstrip(".!?"), code, "en") or ""
+        if not shown or _plain_letters(shown) == _plain_letters(phrase):
             lines.append(_marked(label, "I couldn't confirm this."))
             continue
-        title = f"{label} equivalent" if idiom else label
-        lines.append(_marked(title, shown.rstrip(".")))
+        shown = _sentence_case(shown).rstrip(".")
+        lines.append(_marked(label, shown))
+        if not result_card_word:
+            result_card_word = shown
     result = {"text": "\n".join(lines)}
-    card = _sentence_card(phrase, codes, english, idiom)
-    if card:
-        result["card"] = card
+    if result_card_word:
+        result["card"] = {
+            "language": _language_label(codes[0]).lower() if codes else "",
+            "word": result_card_word,
+            "kind": "sentence",
+            "rows": [],
+            "examples": _tatoeba_examples(english.rstrip(".!?"), codes[0] if codes else "")[:3],
+        }
     return result
 
 
-def _sentence_card(phrase, codes, english, idiom):
-    code = next((item for item in codes if item != "en"), codes[0] if codes else "")
-    if not code:
-        return None
-    shown = english if code == "en" else (_google_translate(phrase, code) or english)
-    if not shown:
-        return None
-    examples = []
-    if not idiom:
-        for word in _sentence_words(phrase)[:8]:
-            gloss = _google_translate(word, code)
-            if gloss and _plain_letters(gloss) != _plain_letters(word):
-                examples.append({"phrase": word, "meaning": gloss[:1].upper() + gloss[1:]})
-    return {
-        "language": _language_label(code).lower(),
-        "word": shown.rstrip("."),
-        "kind": "sentence",
-        "rows": [],
-        "examples": examples,
-    }
+def _sentence_meaning(phrase):
+    """English meaning of a sentence, using the language whose wording matches."""
+    text, detected = _google_pair(phrase, "en", "auto")
+    best_text = text if text and _plain_letters(text) != _plain_letters(phrase) else ""
+    best_hits = 0
+    if best_text and detected:
+        best_hits = _stem_hits(phrase, _google_text(text, detected, "en"))
+
+    def one(code):
+        if code == "en" or code == detected:
+            return "", 0
+        english = _google_text(phrase, "en", code)
+        if not english or _plain_letters(english) == _plain_letters(phrase):
+            return "", 0
+        return english, _stem_hits(phrase, _google_text(english, code, "en"))
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        for english, hits in pool.map(one, list(_LANG_LABEL)):
+            if hits > best_hits:
+                best_text, best_hits = english, hits
+    if best_hits >= 2 and best_text:
+        return _sentence_case(best_text)
+    return _sentence_case(best_text or phrase)
 
 
 def _natural_english(phrase):
@@ -2439,9 +2541,43 @@ def _google_translate(phrase, code, source="auto"):
 
 
 def _google_text(phrase, code, source):
+    """The main Google translation. The dictionary client is tried before the other endpoint."""
+    text, _detected = _google_pair(phrase, code, source)
+    return text
+
+
+def _google_pair(phrase, code, source):
+    sl = "auto" if not source or source == "auto" else source
+    try:
+        response = requests.get(
+            "https://clients5.google.com/translate_a/t",
+            params={"client": "dict-chrome-ex", "sl": sl, "tl": code, "q": (phrase or "")[:500]},
+            headers={"User-Agent": WIKI_USER_AGENT},
+            timeout=12,
+        )
+        if response.ok:
+            text, detected = _clients5_text(response.json())
+            if text:
+                return text, detected
+    except (requests.RequestException, ValueError, TypeError):
+        pass
     payload = _google_payload(phrase, source, code)
     lines = _payload_lines(payload) if payload else []
-    return lines[0] if lines else ""
+    detected = payload[2] if payload and len(payload) > 2 and isinstance(payload[2], str) else ""
+    return (lines[0] if lines else ""), detected
+
+
+def _clients5_text(data):
+    if isinstance(data, str):
+        return data.strip(), ""
+    if isinstance(data, list) and data:
+        first = data[0]
+        if isinstance(first, str):
+            return first.strip(), ""
+        if isinstance(first, list) and first and isinstance(first[0], str):
+            detected = first[1] if len(first) > 1 and isinstance(first[1], str) else ""
+            return first[0].strip(), detected
+    return "", ""
 
 
 def _wiktionary_word(word, code):

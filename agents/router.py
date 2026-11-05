@@ -292,6 +292,16 @@ def answer_question(
                 "source": "conversation",
                 "provider": "local",
             }
+        translated = translate_reply(text)
+        if translated:
+            result = {
+                "response": translated["text"],
+                "source": "knowledge",
+                "provider": "translate",
+            }
+            if translated.get("card"):
+                result["translation"] = translated["card"]
+            return result
         personal_question = _PERSONAL_QUESTION.match(text)
         if personal_question:
             question_word = personal_question.group(1).lower()
@@ -352,18 +362,6 @@ def answer_question(
         known = _local_knowledge(text, independent, username)
         if known:
             return known
-
-    if text and not has_file:
-        translated = translate_reply(text)
-        if translated:
-            result = {
-                "response": translated["text"],
-                "source": "knowledge",
-                "provider": "translate",
-            }
-            if translated.get("card"):
-                result["translation"] = translated["card"]
-            return result
 
     if text and not has_file:
         weather = weather_reply(text)
