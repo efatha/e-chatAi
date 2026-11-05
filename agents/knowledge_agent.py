@@ -1735,6 +1735,17 @@ _LANG = {
     "hindi": "hi", "lingala": "ln", "luganda": "lg", "kirundi": "rn",
     "dutch": "nl", "russian": "ru", "turkish": "tr",
 }
+_LANG_LABEL = {
+    "en": "English", "fr": "French", "es": "Spanish", "sw": "Swahili",
+    "ar": "Arabic", "rw": "Kinyarwanda", "de": "German", "pt": "Portuguese",
+    "it": "Italian", "zh": "Chinese", "ja": "Japanese", "ko": "Korean",
+    "hi": "Hindi", "ln": "Lingala", "lg": "Luganda", "rn": "Kirundi",
+    "nl": "Dutch", "ru": "Russian", "tr": "Turkish",
+}
+_QUOTED_SENTENCE = re.compile(
+    r"^(?:please\s+)?(?:translate|what(?:'s| is))\s+[\"“](.+?)[\"”]\s+(?:in|into|to)\s+([A-Za-z][A-Za-z \-]+?)\s*[?.!]*$",
+    re.IGNORECASE,
+)
 _TRANSLATE = re.compile(
     r"^(?:please\s+)?translate\s+(.+?)\s+(?:in|into|to)\s+([A-Za-z][A-Za-z \-]+?)\s*[?.!]*$",
     re.IGNORECASE,
@@ -1748,7 +1759,7 @@ _WHAT_IN_LANG = re.compile(
 def translate_reply(message):
     """Translate a word or phrase. No account and no fee."""
     text = re.sub(r"\s+", " ", (message or "")).strip()
-    match = _TRANSLATE.match(text) or _WHAT_IN_LANG.match(text)
+    match = _QUOTED_SENTENCE.match(text) or _TRANSLATE.match(text) or _WHAT_IN_LANG.match(text)
     if not match:
         return None
     phrase = _unwrap_quotes(match.group(1).strip(" ."))
@@ -1757,7 +1768,7 @@ def translate_reply(message):
     if not code or not phrase:
         return None
     words = _sentence_words(phrase)
-    if len(words) >= 3:
+    if len(words) >= 2:
         return _sentence_translation(phrase, language, code, words)
     translated = _google_translate(phrase, code)
     if not translated:
@@ -1990,31 +2001,67 @@ def _sentence_words(phrase):
 
 
 def _sentence_translation(phrase, language, code, words):
-    """A quoted or long sentence, read in the language whose words agree."""
-    chosen, meaning, glosses = _sense_reading(phrase, words, code)
+    """A sentence, understood once, then written in every language we know."""
+    chosen, meaning, glosses = _sense_reading(phrase, words, "en")
     if not meaning:
         return {"text": f"I couldn't confirm a translation of {phrase} in {language}."}
-    meaning = meaning[:1].upper() + meaning[1:]
-    if meaning[-1] not in ".!?":
-        meaning += "."
+    meaning = _sentence_case(meaning)
+    shown = meaning if code == "en" else _sentence_case(_google_translate(meaning.rstrip(".!?"), code) or meaning)
     usual = _usual_spelling(meaning, chosen)
     lines = [f"\"{phrase}\" translates to {language[:1].upper() + language[1:]} as:"]
     if usual and _stem_hits(phrase, usual) >= 2 and _plain_letters(usual) != _plain_letters(phrase):
         lines.extend(["", f"Often written: \"{usual}\""])
     examples = []
-    for word, gloss in zip(words, glosses):
-        shown = gloss[:1].upper() + gloss[1:] if gloss else word
-        examples.append({"phrase": word, "meaning": shown})
+    if any(_plain_letters(gloss) != _plain_letters(word) for gloss, word in zip(glosses, words)):
+        for word, gloss in zip(words, glosses):
+            gloss_text = gloss[:1].upper() + gloss[1:] if gloss else word
+            examples.append({"phrase": word, "meaning": gloss_text})
     return {
         "text": "\n".join(lines),
         "card": {
             "language": language,
-            "word": meaning,
+            "word": shown,
             "kind": "sentence",
             "rows": [],
             "examples": examples,
+            "others": _every_language(meaning, code),
         },
     }
+
+
+def _sentence_case(text):
+    text = (text or "").strip()
+    if not text:
+        return ""
+    text = text[:1].upper() + text[1:]
+    if text[-1] not in ".!?":
+        text += "."
+    return text
+
+
+def _every_language(meaning, skip):
+    codes = []
+    seen = set()
+    for lang_code in _LANG_LABEL:
+        if lang_code == skip or lang_code in seen:
+            continue
+        seen.add(lang_code)
+        codes.append(lang_code)
+
+    def one(lang_code):
+        text = _google_translate(meaning.rstrip(".!?"), lang_code)
+        return lang_code, text
+
+    lines = []
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        for lang_code, text in pool.map(one, codes):
+            if text:
+                lines.append({
+                    "phrase": _sentence_case(text),
+                    "meaning": _LANG_LABEL.get(lang_code, lang_code),
+                })
+    lines.sort(key=lambda item: item["meaning"])
+    return lines
 
 
 def _plain_letters(text):
@@ -2022,11 +2069,17 @@ def _plain_letters(text):
 
 
 def _sense_reading(phrase, words, target):
-    payload = _google_payload(phrase, "auto", target)
+    """Read any quoted sentence in the language it is actually written in."""
+    payload = _google_payload(phrase, "auto", "en")
     detected, confidence, meaning = _payload_reading(payload)
-    if detected and detected != target and confidence >= 0.75:
-        glosses = _word_glosses(words, detected, target)
-        return detected, meaning, glosses or words
+    if detected and confidence >= 0.55:
+        if detected == "en" or _plain_letters(meaning) == _plain_letters(phrase):
+            return "en", phrase, words
+        reading = _locked_reading(phrase, words, detected, "en")
+        if reading and _plain_letters(reading[0]) != _plain_letters(phrase):
+            return detected, reading[0], reading[1]
+        if meaning:
+            return detected, meaning, _word_glosses(words, detected, "en")
     candidates = []
     seen = set()
     for source in [detected, *_LANG.values()]:
@@ -2039,23 +2092,26 @@ def _sense_reading(phrase, words, target):
         for source, result in zip(candidates, pool.map(lambda source: _locked_reading(phrase, words, source, target), candidates)):
             if result:
                 readings.append((source, result))
-    best = None
-    best_score = -999
     ranked = []
     for source, (sentence, glosses) in readings:
-        score = _sense_score(sentence, glosses, words)
+        if _plain_letters(sentence) == _plain_letters(phrase):
+            continue
+        changed = sum(
+            1 for gloss, word in zip(glosses, words)
+            if _plain_letters(gloss) != _plain_letters(word)
+        )
+        if changed == 0:
+            continue
+        score = _sense_score(sentence, glosses, words) + changed
         if source == detected:
             score += 0.5
         ranked.append((score, source, sentence, glosses))
-        if score > best_score:
-            best_score = score
+    best = None
     for score, source, sentence, glosses in ranked:
-        if score < best_score - 1:
-            continue
         usual = _google_translate(sentence, source)
-        score += _stem_hits(phrase, usual) * 3
-        if best is None or score > best[0]:
-            best = (score, source, sentence, glosses, usual)
+        total = score + _stem_hits(phrase, usual) * 3
+        if best is None or total > best[0]:
+            best = (total, source, sentence, glosses, usual)
     if best:
         _source, sentence, glosses, usual = best[1], best[2], best[3], best[4]
         glosses = _fill_unchanged(glosses, words, sentence, _source)
@@ -2064,13 +2120,15 @@ def _sense_reading(phrase, words, target):
 
 
 def _locked_reading(phrase, words, source, target):
-    payload = _google_payload("\n".join([phrase, *words]), source, target)
+    marked = "\n".join(f"### {part}" for part in [phrase, *words])
+    payload = _google_payload(marked, source, target)
     if not payload:
         return None
-    lines = _payload_lines(payload)
-    if len(lines) < len(words) + 1:
+    text = "\n".join(_payload_lines(payload))
+    parts = [part.strip() for part in text.split("###") if part.strip()]
+    if len(parts) < len(words) + 1:
         return None
-    return lines[0], lines[-len(words):]
+    return parts[0], parts[1:1 + len(words)]
 
 
 def _word_glosses(words, source, target):

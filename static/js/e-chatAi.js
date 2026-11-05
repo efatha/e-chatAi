@@ -243,9 +243,13 @@ const renderTranslation = (card) => {
     const list = examples
       ? `<p class="tr-note">${card.kind === "sentence" ? "Breakdown" : "Common examples"}</p><ul class="tr-examples">${examples}</ul>`
       : "";
+  const others = (card.others || []).map((item) =>
+    `<li><span class="tr-form">${escapeHtml(item.phrase || "")}</span> – ${escapeHtml(item.meaning || "")}</li>`
+  ).join("");
+  const otherList = others ? `<p class="tr-note">Every language</p><ul class="tr-examples">${others}</ul>` : "";
   root.innerHTML = `
     <p class="tr-word">${escapeHtml(card.word || "")}</p>
-    ${table}${list}`;
+    ${table}${list}${otherList}`;
   return root;
 };
 
