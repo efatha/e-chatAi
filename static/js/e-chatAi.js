@@ -203,6 +203,50 @@ const renderWeather = (card) => {
   return root;
 };
 
+const renderCommons = (photo) => {
+  const figure = document.createElement("figure");
+  figure.className = "commons-photo";
+  const image = document.createElement("img");
+  image.src = photo.thumbnail;
+  image.alt = photo.title || "Wikimedia Commons image";
+  figure.appendChild(image);
+  const caption = document.createElement("figcaption");
+  const credit = document.createElement("a");
+  credit.href = photo.page;
+  credit.target = "_blank";
+  credit.rel = "noopener";
+  credit.textContent = photo.creator || "Wikimedia Commons";
+  caption.appendChild(credit);
+  caption.appendChild(document.createTextNode(" · " + (photo.license || "Commons")));
+  figure.appendChild(caption);
+  return figure;
+};
+
+const renderTranslation = (card) => {
+  const root = document.createElement("div");
+  root.className = "translate-card";
+  const rows = (card.rows || []).map((row) => `
+    <tr>
+      <td>${escapeHtml(row.pronoun || "")}</td>
+      <td class="tr-form">${escapeHtml(row.form || "")}</td>
+      <td>${escapeHtml(row.english || "")}</td>
+    </tr>`).join("");
+  const examples = (card.examples || []).map((item) =>
+    `<li><span class="tr-form">${escapeHtml(item.phrase || "")}</span> – ${escapeHtml(item.meaning || "")}</li>`
+  ).join("");
+  const table = rows ? `
+    <p class="tr-note">Present tense</p>
+    <table class="tr-table">
+      <thead><tr><th>Pronoun</th><th>Conjugation</th><th>English</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>` : "";
+  const list = examples ? `<p class="tr-note">Common examples</p><ul class="tr-examples">${examples}</ul>` : "";
+  root.innerHTML = `
+    <p class="tr-word">${escapeHtml(card.word || "")}</p>
+    ${table}${list}`;
+  return root;
+};
+
 const renderStoredMessage = (item) => {
   if (!item || !["user", "assistant"].includes(item.role)) return;
   const classes = item.role === "user" ? "user-message" : "bot-message";
@@ -220,6 +264,8 @@ const renderStoredMessage = (item) => {
     element.querySelector(".message-text").classList.add("weather-bubble");
     element.querySelector(".message-text").appendChild(renderWeather(item.weather));
   }
+  if (item.commons) element.querySelector(".message-text").appendChild(renderCommons(item.commons));
+  if (item.translation) element.querySelector(".message-text").appendChild(renderTranslation(item.translation));
   eChatBody.insertBefore(element, eChatBody.querySelector(".echat-footer"));
 };
 
@@ -263,7 +309,7 @@ const ensureConversation = (firstMessage) => {
   return thread;
 };
 
-const addThreadMessage = (conversationId, role, content, dictionary, weather) => {
+const addThreadMessage = (conversationId, role, content, dictionary, weather, commons, translation) => {
   const threads = readThreads();
   const index = threads.findIndex((thread) => thread.id === conversationId);
   if (index < 0) return;
@@ -271,6 +317,8 @@ const addThreadMessage = (conversationId, role, content, dictionary, weather) =>
   const message = { role, content, created_at: new Date().toISOString() };
   if (dictionary) message.dictionary = dictionary;
   if (weather) message.weather = weather;
+  if (commons) message.commons = commons;
+  if (translation) message.translation = translation;
   threads[index].messages.push(message);
   threads[index].updatedAt = new Date().toISOString();
   const [updated] = threads.splice(index, 1);
@@ -440,6 +488,7 @@ const generateEchatResponse = async (incomingMsgDiv, conversationId, sentMessage
     memory: ((thread && thread.messages) || []).slice(-40)
   };
   if (pageName) payload.username = pageName;
+  if (thread && thread.focus) payload.focus = thread.focus;
   if (userData.file.data) payload.file = userData.file;
   userData.file = { data: null, mime_type: null };
 
@@ -488,6 +537,7 @@ const generateEchatResponse = async (incomingMsgDiv, conversationId, sentMessage
         msgElement.classList.add("weather-bubble");
         msgElement.appendChild(renderWeather(data.weather));
       }
+      if (data.translation) msgElement.appendChild(renderTranslation(data.translation));
       if (data.commons && data.commons.thumbnail) {
         const figure = document.createElement("figure");
         figure.className = "commons-photo";
@@ -548,8 +598,16 @@ const generateEchatResponse = async (incomingMsgDiv, conversationId, sentMessage
         });
         if (asks.childElementCount) msgElement.appendChild(asks);
       }
+      if (data.focus) {
+        const saved = readThreads();
+        const savedIndex = saved.findIndex((item) => item.id === conversationId);
+        if (savedIndex >= 0) {
+          saved[savedIndex].focus = data.focus;
+          saveThreads(saved);
+        }
+      }
       finishMessage(incomingMsgDiv);
-      addThreadMessage(conversationId, "assistant", data.response, data.dictionary, data.weather);
+      addThreadMessage(conversationId, "assistant", data.response, data.dictionary, data.weather, data.commons, data.translation);
       return;
     }
     throw new Error(data.error || "Backend returned no answer.");

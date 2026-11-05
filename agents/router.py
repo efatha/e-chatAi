@@ -1,6 +1,7 @@
 """Route questions to deterministic reasoning and locally indexed knowledge."""
 
 import re
+from datetime import date
 
 from agents.image_agent import explain_saved_image, image_question, interpret_image
 from agents.independent_agent import (
@@ -20,6 +21,7 @@ from agents.knowledge_agent import (
     wikidata_image,
     wikidata_research,
     how_to_reply,
+    translate_reply,
     weather_reply,
     wikipedia_definition,
     wikipedia_summary,
@@ -34,6 +36,57 @@ def configure(trained_knowledge, word_meanings):
     global _independent_agent, _book_agent
     _independent_agent = IndependentAgent(trained_knowledge, word_meanings)
     _book_agent = BookAgent()
+
+
+def _remembered_focus(text, focus, conversation):
+    """Use the saved subject, or the last weather or fact answer in this chat."""
+    found = dict(focus or {})
+    if found.get("place") or found.get("person") or found.get("topic"):
+        return found
+    for item in reversed(conversation or []):
+        content = str(item.get("content") or "")
+        if "Open-Meteo" in content or "Last reading" in content or "Tomorrow" in content:
+            match = re.search(r"([A-Z][A-Za-z .'-]{2,40}) is \d", content)
+            if match:
+                found["place"] = match.group(1).split(",")[0].strip()
+                return found
+        if "capital of" in content.lower():
+            match = re.search(r"capital of ([A-Z][A-Za-z .'-]+)", content)
+            if match:
+                found["place"] = match.group(1).strip(" .")
+                found["topic"] = found["place"]
+                return found
+    return found
+
+
+def _reuse_subject(text, focus):
+    """A short follow-up keeps the last city, person, or topic."""
+    lowered = re.sub(r"\s+", " ", (text or "").lower()).strip(" ?!.")
+    place = (focus or {}).get("place")
+    if place and lowered in {
+        "and tomorrow", "tomorrow", "what about tomorrow", "tomorrows weather",
+        "and tonight", "tonight",
+    }:
+        when = "tomorrow" if "tomorrow" in lowered else "tonight"
+        return f"what is the weather {when} in {place}"
+    person = (focus or {}).get("person")
+    if person and lowered in {"who is that", "and him", "and her", "and them"}:
+        return f"who is {person}"
+    topic = (focus or {}).get("topic")
+    if topic and lowered in {"tell me more", "more", "and that", "what about it"}:
+        return f"what is {topic}"
+    return None
+
+
+def _capital_place(text):
+    from agents.knowledge_agent import _CAPITAL, _CAPITAL_BARE, _CAPITAL_CITY, _CAPITAL_OWN
+    match = (
+        _CAPITAL.match(text or "")
+        or _CAPITAL_CITY.match(text or "")
+        or _CAPITAL_OWN.match(text or "")
+        or _CAPITAL_BARE.match(text or "")
+    )
+    return match.group(1).strip() if match else ""
 
 
 def book_agent():
@@ -136,13 +189,17 @@ def _accepted_definition(text, history, independent):
 
 def answer_question(
     message, username=None, history=None, file=None, conversation=None,
-    previous_image="", previous_reply="",
+    previous_image="", previous_reply="", focus=None,
 ):
     """Answer only from local rules, curated knowledge, memory, or indexed books."""
     independent = _independent_agent
     history = history or []
     has_file = bool(file and file.get("data"))
     text = (message or "").strip()
+    focus = focus if isinstance(focus, dict) else {}
+    continued = _reuse_subject(text, _remembered_focus(text, focus, conversation))
+    if continued:
+        text = continued
     if has_file:
         seen = interpret_image(file, text)
         if isinstance(seen, dict) and seen.get("response"):
@@ -297,6 +354,18 @@ def answer_question(
             return known
 
     if text and not has_file:
+        translated = translate_reply(text)
+        if translated:
+            result = {
+                "response": _with_name(translated["text"], username),
+                "source": "knowledge",
+                "provider": "translate",
+            }
+            if translated.get("card"):
+                result["translation"] = translated["card"]
+            return result
+
+    if text and not has_file:
         weather = weather_reply(text)
         if weather:
             result = {
@@ -306,6 +375,10 @@ def answer_question(
             }
             if weather.get("card"):
                 result["weather"] = weather["card"]
+                result["focus"] = {
+                    "place": weather["card"].get("query") or weather["card"].get("place"),
+                    "kind": "weather",
+                }
             return result
 
     if text and not has_file:
@@ -318,6 +391,9 @@ def answer_question(
             }
             if current.get("commons"):
                 result["commons"] = current["commons"]
+            place = _capital_place(text)
+            if place:
+                result["focus"] = {"place": place, "topic": place, "kind": "fact"}
             return result
 
     if text and not has_file:
@@ -334,6 +410,7 @@ def answer_question(
                     "source": "knowledge",
                     "provider": "commons",
                     "commons": photo,
+                    "focus": {"topic": pictured, "kind": "picture"},
                 }
             return {
                 "response": _with_name(
@@ -344,14 +421,19 @@ def answer_question(
                 "provider": "commons",
             }
 
+    if text and not has_file and _book_first(text):
+        from_books = book_agent().answer(text)
+        if from_books:
+            from_books["response"] = _with_name(from_books["response"], username)
+            return from_books
+
     if text and not has_file and detect_lookup(text):
         defined = _definition_from_local_or_wikipedia(text, independent, username)
         if defined:
             return defined
         return {
             "response": _with_name(
-                "I couldn’t retrieve a Wikipedia definition for that. "
-                "I won’t answer a definition from an unrelated book passage.",
+                "I couldn't confirm that from the public sources.",
                 username,
             ),
             "source": "knowledge",
@@ -364,7 +446,8 @@ def answer_question(
             return {
                 "response": _with_name(guided, username),
                 "source": "knowledge",
-                "provider": "duckduckgo",
+                "provider": "duckduckgo" if "Source:" not in guided else "guide",
+                "focus": {"topic": text, "kind": "howto"},
             }
 
     if text and not has_file and looks_like_open_question(text):
@@ -379,7 +462,8 @@ def answer_question(
     if text and not has_file:
         from_books = book_agent().answer(text)
         if from_books:
-            from_books["response"] = _with_name(from_books["response"], username)
+            reply = from_books["response"]
+            from_books["response"] = _with_name(reply, username)
             return from_books
 
     if text and not has_file:
@@ -536,6 +620,26 @@ def _image_lines(response):
         for line in str(response or "").splitlines()
         if line.startswith("• ")
     )
+
+
+def _book_first(text):
+    """Proof, definition, and why questions in mathematics come from the local books."""
+    lowered = (text or "").lower()
+    if re.search(r"\b(prove|proof)\b", lowered):
+        return True
+    if re.search(r"\b(define|why)\b", lowered) and re.search(
+        r"\b(theorem|lemma|logic|set|vector|matrix|probability|convex|quantifier|integer|prime|function|basis|null|axiom)\b",
+        lowered,
+    ):
+        return True
+    return False
+
+
+def passages_source(reply):
+    match = re.search(r"_([^_\n]+), p\. (\d+)_", reply or "")
+    if not match:
+        return ""
+    return f"Source: {match.group(1)}, p. {match.group(2)}."
 
 
 def _with_name(text, username):

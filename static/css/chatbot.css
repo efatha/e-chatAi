@@ -378,6 +378,32 @@ body{
   background-color: var(--efa-sea);
   border: 1px solid pink;
 }
+.translate-card { margin-top: 12px; }
+.tr-word {
+  display: inline-block;
+  margin: 0 0 8px;
+  padding: 2px 8px;
+  border-radius: 8px;
+  background-image: linear-gradient(45deg, cyan, pink);
+  color: var(--efa-gray-900);
+  font-size: 1.35rem;
+  font-weight: 750;
+}
+.tr-note { margin: 10px 0 4px; font-weight: 700; }
+.tr-table { width: 100%; border-collapse: collapse; font-size: 0.86rem; }
+.tr-table th, .tr-table td {
+  padding: 4px 6px;
+  text-align: left;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.16);
+}
+.tr-form {
+  background-image: linear-gradient(45deg, cyan, pink);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  font-weight: 700;
+}
+.tr-examples { margin: 0; padding-left: 18px; }
 .chat-body .message .message-text a {
   color: #f7fffb;
   font-weight: 700;

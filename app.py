@@ -117,6 +117,9 @@ def _chat_turn():
     else:
         raw_name = session.get("username") or data.get("username") or ""
         username = re.sub(r"\s+", " ", str(raw_name)).strip()[:80] or None
+        incoming_focus = data.get("focus") if isinstance(data.get("focus"), dict) else {}
+        stored_focus = session.get("focus") if isinstance(session.get("focus"), dict) else {}
+        focus = {**stored_focus, **{key: value for key, value in incoming_focus.items() if value}}
         result = answer_question(
             message=message,
             username=username,
@@ -125,11 +128,14 @@ def _chat_turn():
             conversation=conversation,
             previous_image=session.get("image_text") or "",
             previous_reply=session.get("image_reply") or "",
+            focus=focus,
         )
         if "image_text" in result:
             session["image_text"] = result.get("image_text") or ""
         if result.get("image_reply"):
             session["image_reply"] = result["image_reply"]
+        if isinstance(result.get("focus"), dict):
+            session["focus"] = result["focus"]
     if result.get("response"):
         memory.add(conversation_id, "assistant", result["response"])
     return jsonify(result)

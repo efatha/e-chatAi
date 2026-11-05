@@ -217,6 +217,10 @@ _CAPITAL_OWN = re.compile(
     r"^(?:what|which)(?:'s| is)\s+(.+?)(?:'s)\s+(?:current\s+)?capital(?:\s+city)?\s*[?.!]*$",
     re.IGNORECASE,
 )
+_CAPITAL_BARE = re.compile(
+    r"^(?:the\s+)?capital(?:\s+city)?\s+of\s+(.+?)\s*[?.!]*$",
+    re.IGNORECASE,
+)
 _FLAG = re.compile(
     r"^(?:(?:show|give|display)(?:\s+me)?\s+)?(?:the\s+)?flag\s+of\s+(.+?)\s*[?.!]*$",
     re.IGNORECASE,
@@ -235,7 +239,7 @@ def wikidata_current(message):
     """The fact that is true today, plus the picture Wikidata points to."""
     text = (message or "").strip()
     office = _OFFICE.match(text)
-    capital = _CAPITAL.match(text) or _CAPITAL_CITY.match(text) or _CAPITAL_OWN.match(text)
+    capital = _CAPITAL.match(text) or _CAPITAL_CITY.match(text) or _CAPITAL_OWN.match(text) or _CAPITAL_BARE.match(text)
     flag = _FLAG.match(text)
     if office:
         role = office.group(1).lower()
@@ -1020,8 +1024,14 @@ def _meta_text(meta, key):
 _WEATHER = re.compile(
     r"(?:how(?:'s| is)\s+)?(?:what(?:'s| is)\s+)?(?:the\s+)?"
     r"(?:current\s+|today'?s\s+)?(?:weather|temperature|forecast|meteo)"
-    r"(?:\s+now|\s+today|\s+like)?\s+(?:in|at|for|of)\s+(.+?)"
-    r"(?:\s+now|\s+today|\s+right\s+now)?\s*[?.!]*$",
+    r"(?:\s+now|\s+today|\s+tomorrow|\s+like)?\s+(?:in|at|for|of)\s+(.+?)"
+    r"(?:\s+now|\s+today|\s+right\s+now|\s+tomorrow)?\s*[?.!]*$",
+    re.IGNORECASE,
+)
+_WEATHER_LOOSE = re.compile(
+    r"^(?:the\s+)?(?:weather|forecast|temperature|meteo)"
+    r"(?:\s+now|\s+today|\s+tomorrow)?\s+(?:in|at|for|of\s+)?(.+?)"
+    r"(?:\s+now|\s+today|\s+tomorrow)?\s*[?.!]*$",
     re.IGNORECASE,
 )
 _WEATHER_CODE = {
@@ -1051,7 +1061,7 @@ _WEATHER_CODE = {
 
 def weather_reply(message):
     """Today's weather for a city, from Open-Meteo. No account and no fee."""
-    match = _WEATHER.match((message or "").strip())
+    match = _WEATHER.match((message or "").strip()) or _WEATHER_LOOSE.match((message or "").strip())
     if not match:
         return None
     place = re.sub(r"\s+", " ", match.group(1)).strip(" .,")
@@ -1063,7 +1073,8 @@ def weather_reply(message):
             "text": f"I couldn't find a city called {place}.",
             "card": None,
         }
-    card = _weather_card(found)
+    tomorrow = bool(re.search(r"\btomorrow\b", message or "", re.IGNORECASE))
+    card = _weather_card(found, tomorrow=tomorrow)
     if not card:
         return {
             "text": f"I couldn't read the weather for {found['label']} just now.",
@@ -1073,7 +1084,8 @@ def weather_reply(message):
     return {
         "text": (
             f"{card['place']} is {card['temperature']}°C and {card['condition'].lower()}. "
-            f"{card['reading']} {card['clock']}."
+            f"{card['reading']} {card['clock']}.\n"
+            "Source: Open-Meteo."
         ),
         "card": card,
     }
@@ -1105,7 +1117,7 @@ def _weather_place(name):
     }
 
 
-def _weather_card(place):
+def _weather_card(place, tomorrow=False):
     try:
         response = requests.get(
             "https://api.open-meteo.com/v1/forecast",
@@ -1115,7 +1127,7 @@ def _weather_card(place):
                 "timezone": place["timezone"],
                 "current": "temperature_2m,relative_humidity_2m,weather_code",
                 "hourly": "temperature_2m,precipitation_probability,weather_code",
-                "daily": "temperature_2m_max,temperature_2m_min,sunrise,sunset",
+                "daily": "weather_code,temperature_2m_max,temperature_2m_min,sunrise,sunset",
                 "forecast_hours": 8,
             },
             headers={"User-Agent": WIKI_USER_AGENT},
@@ -1139,8 +1151,9 @@ def _weather_card(place):
     rain = hours[0]["rain"] if hours else None
     highs = (daily.get("temperature_2m_max") or [None])[0]
     lows = (daily.get("temperature_2m_min") or [None])[0]
-    return {
+    card = {
         "place": place["label"],
+        "query": place["label"].split(",")[0],
         "date": stamp["date"],
         "clock": stamp["clock"],
         "reading": stamp["reading"],
@@ -1153,6 +1166,29 @@ def _weather_card(place):
         "humidity": _humidity_word(humidity),
         "hours": hours[:6],
     }
+    if not tomorrow:
+        return card
+    codes = daily.get("weather_code") or []
+    highs = daily.get("temperature_2m_max") or []
+    dates = daily.get("time") or []
+    if len(highs) < 2 or highs[1] is None:
+        return card
+    next_when = f"{dates[1]}T12:00" if len(dates) > 1 else when
+    next_code = int(codes[1] or 0) if len(codes) > 1 else code
+    next_condition, next_icon = _sky_at(
+        _WEATHER_CODE.get(next_code, ("Mixed", "cloud")),
+        next_when,
+        daily,
+    )
+    card["temperature"] = round(highs[1])
+    card["condition"] = next_condition
+    card["icon"] = next_icon
+    card["reading"] = "Tomorrow"
+    try:
+        card["clock"] = datetime.fromisoformat(dates[1]).strftime("%#d %B %Y" if os.name == "nt" else "%-d %B %Y")
+    except (ValueError, IndexError, TypeError):
+        card["clock"] = dates[1] if len(dates) > 1 else card["clock"]
+    return card
 
 
 def _sky_at(named, when, daily):
@@ -1373,6 +1409,13 @@ def _wikipedia_plain_summary(title):
             headers={"User-Agent": WIKI_USER_AGENT, "Accept": "application/json"},
             timeout=16,
         )
+        if response.status_code == 404:
+            return None
+        response.raise_for_status()
+        payload = response.json() or {}
+    except (requests.RequestException, ValueError) as exc:
+        logger.warning("Wikipedia summary failed: %s", type(exc).__name__)
+        return None
         if response.status_code == 404:
             return None
         response.raise_for_status()
@@ -1681,6 +1724,139 @@ def _trim(text, limit):
     return cut + "..."
 
 
+_LANG = {
+    "english": "en", "french": "fr", "francais": "fr", "français": "fr",
+    "spanish": "es", "espanol": "es", "español": "es",
+    "swahili": "sw", "kiswahili": "sw",
+    "arabic": "ar", "kinyarwanda": "rw", "german": "de", "portuguese": "pt",
+    "italian": "it", "chinese": "zh", "japanese": "ja", "korean": "ko",
+    "hindi": "hi", "lingala": "ln", "luganda": "lg", "kirundi": "rn",
+    "dutch": "nl", "russian": "ru", "turkish": "tr",
+}
+_TRANSLATE = re.compile(
+    r"^(?:please\s+)?translate\s+(.+?)\s+(?:in|into|to)\s+([A-Za-z][A-Za-z \-]+?)\s*[?.!]*$",
+    re.IGNORECASE,
+)
+_WHAT_IN_LANG = re.compile(
+    r"^what(?:'s| is)\s+(.+?)\s+in\s+([A-Za-z][A-Za-z \-]+?)\s*[?.!]*$",
+    re.IGNORECASE,
+)
+
+
+def translate_reply(message):
+    """Translate a word or phrase. No account and no fee."""
+    text = re.sub(r"\s+", " ", (message or "")).strip()
+    match = _TRANSLATE.match(text) or _WHAT_IN_LANG.match(text)
+    if not match:
+        return None
+    phrase = match.group(1).strip(" .")
+    language = re.sub(r"\s+", " ", match.group(2)).strip(" .").lower()
+    code = _LANG.get(language)
+    if not code or not phrase:
+        return None
+    translated = _google_translate(phrase, code)
+    if not translated:
+        return {"text": f"I couldn't confirm a translation of {phrase} in {language}."}
+    verb = _is_verb(phrase) and code == "fr"
+    kind = "verb" if verb else "word"
+    lead = "to " if verb and not phrase.lower().startswith("to ") else ""
+    sentence = f"The {language[:1].upper() + language[1:]} {kind} for {lead}{phrase} is {translated}."
+    return {
+        "text": sentence,
+        "card": {
+            "language": language,
+            "word": translated,
+            "kind": kind,
+            "rows": _french_rows(translated, phrase) if verb else [],
+            "examples": _french_examples(phrase) if verb else [],
+        },
+    }
+
+
+def _is_verb(phrase):
+    if " " in phrase.strip():
+        return False
+    entry = wiktionary_entry(phrase)
+    if not entry:
+        return False
+    return any((sense.get("part") or "").lower() == "verb" for sense in entry.get("senses") or [])
+
+
+def _french_rows(infinitive, english):
+    forms = _french_forms(infinitive.strip().lower())
+    if not forms:
+        return []
+    gloss = _english_forms(english)
+    labels = (
+        ("Je", "I"),
+        ("Tu", "You (informal)"),
+        ("Il / Elle / On", "He / She / One"),
+        ("Nous", "We"),
+        ("Vous", "You (formal / plural)"),
+        ("Ils / Elles", "They"),
+    )
+    return [
+        {"pronoun": pronoun, "form": form, "english": f"{who} {gloss[index]}"}
+        for index, ((pronoun, who), form) in enumerate(zip(labels, forms))
+    ]
+
+
+def _french_forms(word):
+    special = {
+        "être": ("suis", "es", "est", "sommes", "êtes", "sont"),
+        "avoir": ("ai", "as", "a", "avons", "avez", "ont"),
+        "aller": ("vais", "vas", "va", "allons", "allez", "vont"),
+        "faire": ("fais", "fais", "fait", "faisons", "faites", "font"),
+        "dire": ("dis", "dis", "dit", "disons", "dites", "disent"),
+        "voir": ("vois", "vois", "voit", "voyons", "voyez", "voient"),
+        "venir": ("viens", "viens", "vient", "venons", "venez", "viennent"),
+        "prendre": ("prends", "prends", "prend", "prenons", "prenez", "prennent"),
+        "pouvoir": ("peux", "peux", "peut", "pouvons", "pouvez", "peuvent"),
+        "vouloir": ("veux", "veux", "veut", "voulons", "voulez", "veulent"),
+    }
+    if word in special:
+        return special[word]
+    if word.endswith("er") and len(word) > 3:
+        stem = word[:-2]
+        return (stem + "e", stem + "es", stem + "e", stem + "ons", stem + "ez", stem + "ent")
+    return ()
+
+
+def _english_forms(word):
+    base = word.lower().removeprefix("to ").strip()
+    third = base + "es" if base.endswith(("s", "sh", "ch", "x", "o")) else base + "s"
+    return (base, base, third, base, base, base)
+
+
+def _french_examples(phrase):
+    base = phrase.lower().removeprefix("to ").strip()
+    examples = []
+    for prompt in (f"to {base} a gift", f"to {base} an answer", f"{base} me that"):
+        french = _google_translate(prompt, "fr")
+        if french:
+            examples.append({"phrase": french, "meaning": prompt[0].upper() + prompt[1:]})
+    return examples
+
+
+def _google_translate(phrase, code):
+    try:
+        response = requests.get(
+            "https://translate.googleapis.com/translate_a/single",
+            params={"client": "gtx", "sl": "auto", "tl": code, "dt": "t", "q": phrase[:300]},
+            headers={"User-Agent": WIKI_USER_AGENT},
+            timeout=12,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        parts = payload[0] if isinstance(payload, list) and payload else []
+        text = "".join(part[0] for part in parts if part and part[0]).strip()
+    except (requests.RequestException, ValueError, IndexError, TypeError):
+        return ""
+    if not text or text.lower() == phrase.lower():
+        return text
+    return text
+
+
 _HOW = re.compile(
     r"^how\s+(?:do\s+i|can\s+i|could\s+i|to|does\s+one)\s+(.+?)\s*[?.!]*$",
     re.IGNORECASE,
@@ -1724,7 +1900,7 @@ def how_to_reply(message):
     focused = [note for note in spoken if goal.lower() not in note.lower()[:70]]
     spoken = focused or spoken
     if not spoken:
-        return None
+        return "I couldn't confirm that from the public sources."
     first, *rest = spoken
     if not rest:
         return f"To {goal}, {first}"

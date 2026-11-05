@@ -347,7 +347,7 @@ def image_question(text):
     if re.search(r"\b(describe more|describe it|explain it|explain more|talk more)\b", lowered):
         return True
     return bool(re.search(
-        r"\b(image|picture|photo|screenshot|slide|written|writing|text|words|read|say|says)\b",
+        r"\b(image|picture|photo|screenshot|slide|written|writing|text|words|read|say|says|wearing|clothes|outfit|dressed)\b",
         lowered,
     ))
 
@@ -356,6 +356,16 @@ def explain_saved_image(question, saved_text, saved_reply=""):
     """Paraphrase the last image reading when the user asks to describe or explain it."""
     lowered = (question or "").lower()
     previous = " ".join(str(saved_reply or "").split())
+    if re.search(r"\b(wearing|clothes|outfit|dressed)\b", lowered):
+        worn = re.search(r"[^.]*\bwearing\b[^.]*\.", previous, re.IGNORECASE)
+        if worn:
+            return "On that same image, " + worn.group(0).strip()
+        if previous:
+            return (
+                "Looking again at that same image: "
+                f"{previous} I can only repeat clothing that was already named."
+            )
+        return "I don't still have that image. Upload it again and ask what they are wearing."
     if re.search(r"\b(describe more|describe it|explain it|explain more|talk more)\b", lowered):
         if not previous and not saved_text:
             return "I don't still have that image. Upload it again and ask what it is."
