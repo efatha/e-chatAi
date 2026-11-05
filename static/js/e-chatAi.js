@@ -240,7 +240,9 @@ const renderTranslation = (card) => {
       <thead><tr><th>Pronoun</th><th>Conjugation</th><th>English</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>` : "";
-  const list = examples ? `<p class="tr-note">Common examples</p><ul class="tr-examples">${examples}</ul>` : "";
+    const list = examples
+      ? `<p class="tr-note">${card.kind === "sentence" ? "Breakdown" : "Common examples"}</p><ul class="tr-examples">${examples}</ul>`
+      : "";
   root.innerHTML = `
     <p class="tr-word">${escapeHtml(card.word || "")}</p>
     ${table}${list}`;

@@ -11,6 +11,7 @@ import logging
 import os
 import random
 import re
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
@@ -1750,11 +1751,14 @@ def translate_reply(message):
     match = _TRANSLATE.match(text) or _WHAT_IN_LANG.match(text)
     if not match:
         return None
-    phrase = match.group(1).strip(" .")
+    phrase = _unwrap_quotes(match.group(1).strip(" ."))
     language = re.sub(r"\s+", " ", match.group(2)).strip(" .").lower()
     code = _LANG.get(language)
     if not code or not phrase:
         return None
+    words = _sentence_words(phrase)
+    if len(words) >= 3:
+        return _sentence_translation(phrase, language, code, words)
     translated = _google_translate(phrase, code)
     if not translated:
         return {"text": f"I couldn't confirm a translation of {phrase} in {language}."}
@@ -1972,6 +1976,221 @@ def _usage_examples(code, infinitive, phrase, verb, rows):
         if line:
             examples.append({"phrase": line, "meaning": prompt[:1].upper() + prompt[1:]})
     return examples
+
+
+def _unwrap_quotes(phrase):
+    text = (phrase or "").strip()
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in "\"'“”":
+        return text[1:-1].strip()
+    return text
+
+
+def _sentence_words(phrase):
+    return [word for word in re.split(r"\s+", phrase.strip()) if word]
+
+
+def _sentence_translation(phrase, language, code, words):
+    """A quoted or long sentence, read in the language whose words agree."""
+    chosen, meaning, glosses = _sense_reading(phrase, words, code)
+    if not meaning:
+        return {"text": f"I couldn't confirm a translation of {phrase} in {language}."}
+    meaning = meaning[:1].upper() + meaning[1:]
+    if meaning[-1] not in ".!?":
+        meaning += "."
+    usual = _usual_spelling(meaning, chosen)
+    lines = [f"\"{phrase}\" translates to {language[:1].upper() + language[1:]} as:"]
+    if usual and _stem_hits(phrase, usual) >= 2 and _plain_letters(usual) != _plain_letters(phrase):
+        lines.extend(["", f"Often written: \"{usual}\""])
+    examples = []
+    for word, gloss in zip(words, glosses):
+        shown = gloss[:1].upper() + gloss[1:] if gloss else word
+        examples.append({"phrase": word, "meaning": shown})
+    return {
+        "text": "\n".join(lines),
+        "card": {
+            "language": language,
+            "word": meaning,
+            "kind": "sentence",
+            "rows": [],
+            "examples": examples,
+        },
+    }
+
+
+def _plain_letters(text):
+    return re.sub(r"[^a-z0-9]+", "", (text or "").lower())
+
+
+def _sense_reading(phrase, words, target):
+    payload = _google_payload(phrase, "auto", target)
+    detected, confidence, meaning = _payload_reading(payload)
+    if detected and detected != target and confidence >= 0.75:
+        glosses = _word_glosses(words, detected, target)
+        return detected, meaning, glosses or words
+    candidates = []
+    seen = set()
+    for source in [detected, *_LANG.values()]:
+        if not source or source == target or source in seen:
+            continue
+        seen.add(source)
+        candidates.append(source)
+    readings = []
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        for source, result in zip(candidates, pool.map(lambda source: _locked_reading(phrase, words, source, target), candidates)):
+            if result:
+                readings.append((source, result))
+    best = None
+    best_score = -999
+    ranked = []
+    for source, (sentence, glosses) in readings:
+        score = _sense_score(sentence, glosses, words)
+        if source == detected:
+            score += 0.5
+        ranked.append((score, source, sentence, glosses))
+        if score > best_score:
+            best_score = score
+    for score, source, sentence, glosses in ranked:
+        if score < best_score - 1:
+            continue
+        usual = _google_translate(sentence, source)
+        score += _stem_hits(phrase, usual) * 3
+        if best is None or score > best[0]:
+            best = (score, source, sentence, glosses, usual)
+    if best:
+        _source, sentence, glosses, usual = best[1], best[2], best[3], best[4]
+        glosses = _fill_unchanged(glosses, words, sentence, _source)
+        return _source, sentence, glosses
+    return detected, meaning, _word_glosses(words, detected, target) if detected else words
+
+
+def _locked_reading(phrase, words, source, target):
+    payload = _google_payload("\n".join([phrase, *words]), source, target)
+    if not payload:
+        return None
+    lines = _payload_lines(payload)
+    if len(lines) < len(words) + 1:
+        return None
+    return lines[0], lines[-len(words):]
+
+
+def _word_glosses(words, source, target):
+    payload = _google_payload("\n".join(words), source, target)
+    lines = _payload_lines(payload)
+    if len(lines) < len(words):
+        return words
+    return lines[-len(words):]
+
+
+_SENSE_SKIP = {
+    "a", "an", "the", "to", "and", "or", "of", "in", "on", "for", "me", "i",
+    "let", "there", "that", "also", "with", "my", "your",
+}
+
+
+def _stem_hits(left, right):
+    left_words = _sentence_words(left or "")
+    right_words = _sentence_words(right or "")
+    hits = 0
+    used = set()
+    for word in left_words:
+        stem = _plain_letters(word)[:4]
+        if len(stem) < 3:
+            continue
+        for other in right_words:
+            if other in used:
+                continue
+            plain = _plain_letters(other)
+            if stem in plain or plain[:4] == stem:
+                used.add(other)
+                hits += 1
+                break
+    return hits
+
+
+def _fill_unchanged(glosses, words, sentence, source):
+    glosses = list(glosses)
+    unexplained = []
+    for word in _content_words(sentence):
+        if not any(_stem_hits(word, gloss) for gloss in glosses):
+            unexplained.append(word)
+    for index, (gloss, word) in enumerate(zip(glosses, words)):
+        if _plain_letters(gloss) != _plain_letters(word):
+            continue
+        for extra in list(unexplained):
+            native = _google_translate(extra, source)
+            if native and _stem_hits(word, native):
+                glosses[index] = extra
+                unexplained.remove(extra)
+                break
+    return glosses
+
+
+def _sense_score(sentence, glosses, words):
+    sentence_words = _content_words(sentence)
+    gloss_words = _content_words(" ".join(glosses))
+    used = set()
+    overlap = 0
+    for word in sentence_words:
+        for other in gloss_words:
+            if other in used:
+                continue
+            if word == other or word.startswith(other[:4]) or other.startswith(word[:4]):
+                if min(len(word), len(other)) >= 3:
+                    used.add(other)
+                    overlap += 1
+                    break
+    unchanged = 0
+    for gloss, source in zip(glosses, words):
+        if _plain_letters(gloss) == _plain_letters(source):
+            unchanged += 1
+    return overlap * 2 - unchanged
+
+
+def _content_words(text):
+    return [
+        word for word in re.findall(r"[a-z']+", (text or "").lower())
+        if word not in _SENSE_SKIP and len(word) > 1
+    ]
+
+
+def _usual_spelling(meaning, source):
+    if not source:
+        return ""
+    return _google_translate(meaning.rstrip(".!?"), source)
+
+
+def _google_payload(phrase, source, target):
+    try:
+        response = requests.get(
+            "https://translate.googleapis.com/translate_a/single",
+            params={"client": "gtx", "sl": source or "auto", "tl": target, "dt": "t", "q": phrase[:500]},
+            headers={"User-Agent": WIKI_USER_AGENT},
+            timeout=12,
+        )
+        response.raise_for_status()
+        payload = response.json()
+    except (requests.RequestException, ValueError):
+        return None
+    if not isinstance(payload, list) or not payload or not isinstance(payload[0], list):
+        return None
+    return payload
+
+
+def _payload_lines(payload):
+    parts = []
+    for block in payload[0]:
+        if isinstance(block, list) and block and isinstance(block[0], str):
+            parts.append(block[0])
+    return [line.strip() for line in "".join(parts).splitlines() if line.strip()]
+
+
+def _payload_reading(payload):
+    if not payload:
+        return "", 0, ""
+    lines = _payload_lines(payload)
+    detected = payload[2] if len(payload) > 2 and isinstance(payload[2], str) else ""
+    confidence = payload[6] if len(payload) > 6 and isinstance(payload[6], (int, float)) else 0
+    return detected, confidence, lines[0] if lines else ""
 
 
 def _google_translate(phrase, code):
