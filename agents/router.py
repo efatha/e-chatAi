@@ -357,7 +357,7 @@ def answer_question(
         translated = translate_reply(text)
         if translated:
             result = {
-                "response": _with_name(translated["text"], username),
+                "response": translated["text"],
                 "source": "knowledge",
                 "provider": "translate",
             }

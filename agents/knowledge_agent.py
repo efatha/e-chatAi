@@ -1750,6 +1750,10 @@ _TRANSLATE = re.compile(
     r"^(?:please\s+)?translate\s+(.+?)\s+(?:in|into|to)\s+([A-Za-z][A-Za-z \-]+?)\s*[?.!]*$",
     re.IGNORECASE,
 )
+_HOW_SAY = re.compile(
+    r"^(?:please\s+)?how\s+do\s+you\s+say\s+(.+?)\s+(?:in|into|to)\s+([A-Za-z][A-Za-z \-]+?)\s*[?.!]*$",
+    re.IGNORECASE,
+)
 _WHAT_IN_LANG = re.compile(
     r"^what(?:'s| is)\s+(.+?)\s+in\s+([A-Za-z][A-Za-z \-]+?)\s*[?.!]*$",
     re.IGNORECASE,
@@ -1757,38 +1761,174 @@ _WHAT_IN_LANG = re.compile(
 
 
 def translate_reply(message):
-    """Translate a word or phrase. No account and no fee."""
+    """Translate a word, expression, or passage into only the languages asked for."""
     text = re.sub(r"\s+", " ", (message or "")).strip()
-    match = _QUOTED_SENTENCE.match(text) or _TRANSLATE.match(text) or _WHAT_IN_LANG.match(text)
-    if not match:
+    parsed = _parse_translation_request(text)
+    if not parsed:
         return None
-    phrase = _unwrap_quotes(match.group(1).strip(" ."))
-    language = re.sub(r"\s+", " ", match.group(2)).strip(" .").lower()
-    code = _LANG.get(language)
-    if not code or not phrase:
+    phrase, codes, explain = parsed
+    if not phrase:
         return None
+    if explain and not codes:
+        return _meaning_reply(phrase)
+    if not codes:
+        return None
+    kind = _translation_kind(phrase)
+    if kind == "paragraph":
+        return _paragraph_translation(phrase, codes)
+    if kind == "sentence":
+        return _sentence_translation(phrase, codes)
+    return _word_translation(phrase, codes)
+
+
+def _parse_translation_request(text):
+    meaning = re.match(
+        r"^what\s+does\s+(.+?)\s+mean(?:\s+(?:in|into|to)\s+(.+))?\s*[?.!]*$",
+        text,
+        re.IGNORECASE,
+    )
+    if meaning:
+        phrase = _unwrap_quotes(meaning.group(1).strip(" .\""))
+        return phrase, _language_codes(meaning.group(2) or ""), True
+    lead = re.match(
+        r"^(?:please\s+)?(?:how\s+do\s+you\s+say|translate|what(?:'s| is))\s+(.+)$",
+        text,
+        re.IGNORECASE,
+    )
+    if not lead:
+        return None
+    body = lead.group(1).strip()
+    names = "|".join(re.escape(name) for name in sorted(_LANG, key=len, reverse=True))
+    found = re.search(
+        rf"\s+(?:in|into|to)\s+((?:every|all)(?:\s+languages?)?|(?:{names})(?:\s*(?:,|and|&)\s*(?:{names}))*)\s*[?.!]*$",
+        body,
+        re.IGNORECASE,
+    )
+    if not found:
+        return None
+    phrase = _unwrap_quotes(body[:found.start()].strip(" .\""))
+    return phrase, _language_codes(found.group(1)), False
+
+
+def _language_codes(tail):
+    tail = re.sub(r"\s+", " ", (tail or "")).strip(" .?").lower()
+    if not tail:
+        return []
+    if re.fullmatch(r"(?:every|all)(?:\s+languages?)?", tail):
+        return list(_LANG_LABEL)
+    codes = []
+    for name in re.split(r"\s*(?:,|and|&)\s*", tail):
+        code = _LANG.get(name.strip())
+        if code and code not in codes:
+            codes.append(code)
+    return codes
+
+
+def _language_label(code):
+    return _LANG_LABEL.get(code, code)
+
+
+def _marked(label, value):
+    return f"*{label}:* {value}"
+
+
+def _translation_kind(phrase):
+    """A word stays a word. A clause or idiom is a sentence. A passage is a paragraph."""
     words = _sentence_words(phrase)
-    if len(words) >= 2:
-        return _sentence_translation(phrase, language, code, words)
-    translated = _google_translate(phrase, code)
-    if not translated:
-        return {"text": f"I couldn't confirm a translation of {phrase} in {language}."}
-    verb = _is_verb(phrase) and code in {"fr", "es"}
-    kind = "verb" if verb else "word"
-    lead = "to " if verb and not phrase.lower().startswith("to ") else ""
-    sentence = f"The {language[:1].upper() + language[1:]} {kind} for {lead}{phrase} is {translated}."
+    stops = len(re.findall(r"[.!?]", phrase))
+    if "\n" in phrase or len(words) >= 25 or stops >= 2:
+        return "paragraph"
+    clause = re.search(
+        r"\b(?:i|i'm|im|don't|dont|do not|he|she|we|they|it|there)\b",
+        phrase,
+        re.IGNORECASE,
+    )
+    if len(words) >= 3 or (clause and len(words) >= 2):
+        return "sentence"
+    return "word"
+
+
+def _word_translation(phrase, codes):
+    lines = []
+    card = None
+    for code in codes:
+        translated = _google_translate(phrase, code)
+        label = _language_label(code)
+        if not translated:
+            lines.append(_marked(label, "I couldn't confirm this."))
+            continue
+        shown = translated[:1].upper() + translated[1:]
+        lines.append(_marked(label, shown))
+        if card is None:
+            card = _word_card(phrase, code, translated)
+    result = {"text": "\n".join(lines)}
+    if card:
+        result["card"] = card
+    return result
+
+
+def _word_card(phrase, code, translated):
+    entry = wiktionary_entry(phrase) if " " not in phrase.strip() else None
+    role = ""
+    if entry:
+        role = ((entry.get("senses") or [{}])[0].get("part") or "").lower()
+    verb = role == "verb" and code in {"fr", "es"}
     rows = _present_rows(code, translated, phrase) if verb else []
-    examples = _usage_examples(code, translated, phrase, verb, rows)
     return {
-        "text": sentence,
-        "card": {
-            "language": language,
-            "word": translated,
-            "kind": kind,
-            "rows": rows,
-            "examples": examples,
-        },
+        "language": _language_label(code).lower(),
+        "word": translated,
+        "kind": "verb" if verb else (role or "word"),
+        "rows": rows,
+        "examples": _usage_examples(code, translated, phrase, verb, rows),
     }
+
+
+def _meaning_reply(phrase):
+    english = _natural_english(phrase)
+    return {"text": "\n".join([
+        _marked("Expression", phrase),
+        _marked("Meaning", english.rstrip(".")),
+    ])}
+
+
+def _paragraph_translation(phrase, codes):
+    """The whole passage, in each language asked for, with its breaks kept."""
+    lines = []
+    for code in codes:
+        translated = _translate_passage(phrase, code)
+        label = _language_label(code)
+        lines.append(_marked(label, translated or "I couldn't confirm this."))
+    return {"text": "\n\n".join(lines)}
+
+
+def _translate_passage(phrase, code):
+    pieces = re.split(r"(\n+)", phrase)
+    rendered = []
+    for piece in pieces:
+        if not piece.strip():
+            rendered.append(piece)
+            continue
+        rendered.append(_translate_long(piece, code))
+    return "".join(rendered).strip()
+
+
+def _translate_long(text, code):
+    sentences = re.findall(r".+?(?:[.!?]+(?:\s+|$)|$)", text, re.DOTALL) or [text]
+    chunks = []
+    buf = ""
+    for sentence in sentences:
+        if buf and len(buf) + len(sentence) > 400:
+            chunks.append(buf)
+            buf = sentence
+        else:
+            buf += sentence
+    if buf:
+        chunks.append(buf)
+    parts = []
+    for chunk in chunks:
+        translated = _google_text(chunk.strip(), code, "auto") or _google_text(chunk.strip(), code, "en")
+        parts.append(translated or chunk.strip())
+    return " ".join(part.strip() for part in parts if part.strip())
 
 
 def _is_verb(phrase):
@@ -2000,33 +2140,64 @@ def _sentence_words(phrase):
     return [word for word in re.split(r"\s+", phrase.strip()) if word]
 
 
-def _sentence_translation(phrase, language, code, words):
-    """A sentence, understood once, then written in every language we know."""
-    chosen, meaning, glosses = _sense_reading(phrase, words, "en")
-    if not meaning:
-        return {"text": f"I couldn't confirm a translation of {phrase} in {language}."}
-    meaning = _sentence_case(meaning)
-    shown = meaning if code == "en" else _sentence_case(_google_translate(meaning.rstrip(".!?"), code) or meaning)
-    usual = _usual_spelling(meaning, chosen)
-    lines = [f"\"{phrase}\" translates to {language[:1].upper() + language[1:]} as:"]
-    if usual and _stem_hits(phrase, usual) >= 2 and _plain_letters(usual) != _plain_letters(phrase):
-        lines.extend(["", f"Often written: \"{usual}\""])
+def _sentence_translation(phrase, codes):
+    """The sentence as a whole, in each language the user named."""
+    english = _natural_english(phrase)
+    idiom = _plain_letters(english) != _plain_letters(phrase)
+    lines = []
+    if idiom:
+        lines.append(_marked("Expression", phrase))
+        lines.append(_marked("Meaning", english.rstrip(".")))
+    for code in codes:
+        label = _language_label(code)
+        if code == "en":
+            shown = english
+        else:
+            shown = _sentence_case(_google_translate(phrase, code) or "")
+        if not shown:
+            lines.append(_marked(label, "I couldn't confirm this."))
+            continue
+        title = f"{label} equivalent" if idiom else label
+        lines.append(_marked(title, shown.rstrip(".")))
+    result = {"text": "\n".join(lines)}
+    card = _sentence_card(phrase, codes, english, idiom)
+    if card:
+        result["card"] = card
+    return result
+
+
+def _sentence_card(phrase, codes, english, idiom):
+    code = next((item for item in codes if item != "en"), codes[0] if codes else "")
+    if not code:
+        return None
+    shown = english if code == "en" else (_google_translate(phrase, code) or english)
+    if not shown:
+        return None
     examples = []
-    if any(_plain_letters(gloss) != _plain_letters(word) for gloss, word in zip(glosses, words)):
-        for word, gloss in zip(words, glosses):
-            gloss_text = gloss[:1].upper() + gloss[1:] if gloss else word
-            examples.append({"phrase": word, "meaning": gloss_text})
+    if not idiom:
+        for word in _sentence_words(phrase)[:8]:
+            gloss = _google_translate(word, code)
+            if gloss and _plain_letters(gloss) != _plain_letters(word):
+                examples.append({"phrase": word, "meaning": gloss[:1].upper() + gloss[1:]})
     return {
-        "text": "\n".join(lines),
-        "card": {
-            "language": language,
-            "word": shown,
-            "kind": "sentence",
-            "rows": [],
-            "examples": examples,
-            "others": _every_language(meaning, code),
-        },
+        "language": _language_label(code).lower(),
+        "word": shown.rstrip("."),
+        "kind": "sentence",
+        "rows": [],
+        "examples": examples,
     }
+
+
+def _natural_english(phrase):
+    """The meaning in English. A same-language idiom is checked through French and back."""
+    direct = _google_text(phrase, "en", "auto")
+    if direct and _plain_letters(direct) != _plain_letters(phrase):
+        return _sentence_case(direct)
+    via = _google_text(phrase, "fr", "en")
+    back = _google_text(via, "en", "fr") if via else ""
+    if back and _plain_letters(back) != _plain_letters(phrase):
+        return _sentence_case(back)
+    return _sentence_case(direct or phrase)
 
 
 def _sentence_case(text):
@@ -2251,23 +2422,53 @@ def _payload_reading(payload):
     return detected, confidence, lines[0] if lines else ""
 
 
-def _google_translate(phrase, code):
+def _google_translate(phrase, code, source="auto"):
+    """One word or sentence. A single word can fall back to Wiktionary."""
+    text = _google_text(phrase, code, source)
+    if text and text.lower() != (phrase or "").strip().lower():
+        return text
+    if source == "auto":
+        forced = _google_text(phrase, code, "en")
+        if forced and forced.lower() != (phrase or "").strip().lower():
+            return forced
+    if phrase and " " not in phrase.strip():
+        wiki = _wiktionary_word(phrase, code)
+        if wiki:
+            return wiki
+    return text or ""
+
+
+def _google_text(phrase, code, source):
+    payload = _google_payload(phrase, source, code)
+    lines = _payload_lines(payload) if payload else []
+    return lines[0] if lines else ""
+
+
+def _wiktionary_word(word, code):
+    """The translation listed on the English Wiktionary page for one word."""
+    label = _LANG_LABEL.get(code)
+    if not label:
+        return ""
     try:
         response = requests.get(
-            "https://translate.googleapis.com/translate_a/single",
-            params={"client": "gtx", "sl": "auto", "tl": code, "dt": "t", "q": phrase[:300]},
+            "https://en.wiktionary.org/w/api.php",
+            params={"action": "parse", "page": word.strip(), "prop": "wikitext", "format": "json"},
             headers={"User-Agent": WIKI_USER_AGENT},
             timeout=12,
         )
         response.raise_for_status()
-        payload = response.json()
-        parts = payload[0] if isinstance(payload, list) and payload else []
-        text = "".join(part[0] for part in parts if part and part[0]).strip()
-    except (requests.RequestException, ValueError, IndexError, TypeError):
+        wikitext = response.json()["parse"]["wikitext"]["*"]
+    except (requests.RequestException, ValueError, KeyError, TypeError):
         return ""
-    if not text or text.lower() == phrase.lower():
-        return text
-    return text
+    forms = re.findall(
+        r"\{\{t\+?\|" + re.escape(code) + r"\|([^|}]+)",
+        wikitext,
+    )
+    for form in forms:
+        cleaned = form.strip().replace("_", " ")
+        if cleaned and not cleaned.startswith("{{"):
+            return cleaned
+    return ""
 
 
 _HOW = re.compile(
