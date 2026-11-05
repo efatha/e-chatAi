@@ -5,6 +5,7 @@ Wikipedia. When Ollama is running, Flask asks it to explain those notes and
 returns both together.
 """
 
+import html
 import json
 import logging
 import os
@@ -1084,8 +1085,7 @@ def weather_reply(message):
     return {
         "text": (
             f"{card['place']} is {card['temperature']}°C and {card['condition'].lower()}. "
-            f"{card['reading']} {card['clock']}.\n"
-            "Source: Open-Meteo."
+            f"{card['reading']} {card['clock']}."
         ),
         "card": card,
     }
@@ -1233,7 +1233,8 @@ def _weather_stamp(value, offset_seconds=0):
     hour = moment.strftime("%I").lstrip("0") or "12"
     local_now = datetime.now(timezone.utc) + timedelta(seconds=int(offset_seconds or 0))
     age = local_now.replace(tzinfo=None) - moment.replace(tzinfo=None)
-    reading = "Live" if timedelta(0) <= age <= timedelta(minutes=5) else "Last reading"
+    # Open-Meteo publishes the current hour. That hour is the live reading.
+    reading = "Live" if timedelta(0) <= age < timedelta(hours=1) else "Last reading"
     return {
         "date": moment.strftime("%A, %-d %B %Y") if os.name != "nt" else moment.strftime("%A, %#d %B %Y"),
         "clock": f"{hour}:{moment.strftime('%M')} {moment.strftime('%p')}",
@@ -1757,18 +1758,20 @@ def translate_reply(message):
     translated = _google_translate(phrase, code)
     if not translated:
         return {"text": f"I couldn't confirm a translation of {phrase} in {language}."}
-    verb = _is_verb(phrase) and code == "fr"
+    verb = _is_verb(phrase) and code in {"fr", "es"}
     kind = "verb" if verb else "word"
     lead = "to " if verb and not phrase.lower().startswith("to ") else ""
     sentence = f"The {language[:1].upper() + language[1:]} {kind} for {lead}{phrase} is {translated}."
+    rows = _present_rows(code, translated, phrase) if verb else []
+    examples = _usage_examples(code, translated, phrase, verb, rows)
     return {
         "text": sentence,
         "card": {
             "language": language,
             "word": translated,
             "kind": kind,
-            "rows": _french_rows(translated, phrase) if verb else [],
-            "examples": _french_examples(phrase) if verb else [],
+            "rows": rows,
+            "examples": examples,
         },
     }
 
@@ -1782,59 +1785,192 @@ def _is_verb(phrase):
     return any((sense.get("part") or "").lower() == "verb" for sense in entry.get("senses") or [])
 
 
-def _french_rows(infinitive, english):
-    forms = _french_forms(infinitive.strip().lower())
-    if not forms:
-        return []
-    gloss = _english_forms(english)
-    labels = (
+_PRESENT_LABELS = {
+    "fr": (
         ("Je", "I"),
         ("Tu", "You (informal)"),
         ("Il / Elle / On", "He / She / One"),
         ("Nous", "We"),
         ("Vous", "You (formal / plural)"),
         ("Ils / Elles", "They"),
+    ),
+    "es": (
+        ("Yo", "I"),
+        ("Tú", "You (informal)"),
+        ("Él / Ella / Usted", "He / She / You"),
+        ("Nosotros", "We"),
+        ("Vosotros", "You (plural, Spain)"),
+        ("Ellos / Ustedes", "They / You"),
+    ),
+}
+
+
+def _present_rows(code, infinitive, english):
+    forms = _present_forms(code, infinitive)
+    if len(forms) != 6:
+        return []
+    gloss = _english_forms(english)
+    labels = _PRESENT_LABELS[code]
+    rows = []
+    for index, ((pronoun, who), form) in enumerate(zip(labels, forms)):
+        if code == "fr" and pronoun == "Je" and form[:1].lower() in "aàâäeéèêëiîïoôöuùûü":
+            pronoun = "J'"
+        rows.append({"pronoun": pronoun, "form": form, "english": f"{who} {gloss[index]}"})
+    return rows
+
+
+def _present_forms(code, infinitive):
+    """Present-tense forms from the language's conjugation page. No guessed stems."""
+    verb = (infinitive or "").strip().split()[0].lower()
+    if not verb or code not in _PRESENT_LABELS:
+        return []
+    key = (code, verb)
+    if key in _CONJ_CACHE:
+        return _CONJ_CACHE[key]
+    try:
+        forms = _french_page(verb) if code == "fr" else _spanish_page(verb)
+    except (requests.RequestException, ValueError, KeyError, TypeError):
+        forms = []
+    _CONJ_CACHE[key] = forms
+    return forms
+
+
+_CONJ_CACHE = {}
+_COMMAND_CACHE = {}
+
+
+def _wiki_html(host, title):
+    response = requests.get(
+        f"https://{host}/w/api.php",
+        params={"action": "parse", "page": title, "prop": "text", "format": "json"},
+        headers={"User-Agent": WIKI_USER_AGENT},
+        timeout=20,
     )
-    return [
-        {"pronoun": pronoun, "form": form, "english": f"{who} {gloss[index]}"}
-        for index, ((pronoun, who), form) in enumerate(zip(labels, forms))
-    ]
+    response.raise_for_status()
+    return response.json()["parse"]["text"]["*"]
 
 
-def _french_forms(word):
-    special = {
-        "être": ("suis", "es", "est", "sommes", "êtes", "sont"),
-        "avoir": ("ai", "as", "a", "avons", "avez", "ont"),
-        "aller": ("vais", "vas", "va", "allons", "allez", "vont"),
-        "faire": ("fais", "fais", "fait", "faisons", "faites", "font"),
-        "dire": ("dis", "dis", "dit", "disons", "dites", "disent"),
-        "voir": ("vois", "vois", "voit", "voyons", "voyez", "voient"),
-        "venir": ("viens", "viens", "vient", "venons", "venez", "viennent"),
-        "prendre": ("prends", "prends", "prend", "prenons", "prenez", "prennent"),
-        "pouvoir": ("peux", "peux", "peut", "pouvons", "pouvez", "peuvent"),
-        "vouloir": ("veux", "veux", "veut", "voulons", "voulez", "veulent"),
-    }
-    if word in special:
-        return special[word]
-    if word.endswith("er") and len(word) > 3:
-        stem = word[:-2]
-        return (stem + "e", stem + "es", stem + "e", stem + "ons", stem + "ez", stem + "ent")
-    return ()
+def _french_page(verb):
+    page = _wiki_html("fr.wiktionary.org", f"Conjugaison:français/{verb}")
+    start = page.find('id="Indicatif"')
+    if start < 0:
+        return []
+    section = page[start:]
+    present = section.find(">Présent</th>")
+    if present < 0:
+        return []
+    end = section.find(">Imparfait</th>", present)
+    chunk = section[present:end if end > 0 else present + 5000]
+    pairs = re.findall(
+        r'align="right">.*?</td>\s*<td[^>]*align="left">(?:\s*<[^>]+>)*\s*([^<]+)',
+        chunk,
+        re.DOTALL,
+    )
+    forms = []
+    for form in pairs:
+        form = html.unescape(form).replace("\xa0", " ").strip(" \\")
+        if form and not form.startswith("\\"):
+            forms.append(form)
+        if len(forms) == 6:
+            break
+    mark = page.lower().find('impératif" class="mw-html-heading"')
+    command = ""
+    if mark >= 0:
+        hit = re.search(
+            r'align="left">(?:\s*<[^>]+>)*\s*([^<\\]+)',
+            page[mark:mark + 2500],
+        )
+        if hit:
+            command = html.unescape(hit.group(1)).replace("\xa0", " ").strip(" \\")
+    _COMMAND_CACHE[("fr", verb)] = command
+    return forms if len(forms) == 6 else []
+
+
+def _spanish_page(verb):
+    page = _wiki_html("en.wiktionary.org", verb)
+    start = page.find('id="Spanish"')
+    if start < 0:
+        return []
+    section = page[start:]
+    indicative = section.lower().find("indicative")
+    if indicative < 0:
+        return []
+    block = section[indicative:]
+    present = re.search(r">\s*present\s*<", block, re.IGNORECASE)
+    imperfect = re.search(r">\s*imperfect\s*<", block, re.IGNORECASE)
+    if not present or not imperfect:
+        return []
+    cell = block[present.end():imperfect.start()]
+    forms = []
+    for piece in re.split(r"</td>", cell):
+        match = re.search(r'lang="es"[^>]*>(?:\s*<a[^>]*>)?([^<]+)', piece)
+        if not match:
+            continue
+        form = html.unescape(match.group(1)).strip()
+        if form:
+            forms.append(form)
+        if len(forms) == 6:
+            break
+    affirmative = re.search(r">affirmative</span>", section, re.IGNORECASE)
+    command = ""
+    if affirmative:
+        after = section[affirmative.end():affirmative.end() + 1600]
+        for piece in re.split(r"</td>", after):
+            match = re.search(r'lang="es"[^>]*>(?:\s*<a[^>]*>)?([^<]+)', piece)
+            if not match:
+                continue
+            command = html.unescape(match.group(1)).strip()
+            if command:
+                break
+    _COMMAND_CACHE[("es", verb)] = command
+    return forms if len(forms) == 6 else []
+
+
+def _french_command(verb):
+    _present_forms("fr", verb)
+    return _COMMAND_CACHE.get(("fr", verb), "")
+
+
+def _spanish_command(verb):
+    _present_forms("es", verb)
+    return _COMMAND_CACHE.get(("es", verb), "")
 
 
 def _english_forms(word):
     base = word.lower().removeprefix("to ").strip()
-    third = base + "es" if base.endswith(("s", "sh", "ch", "x", "o")) else base + "s"
+    third = base + ("es" if base.endswith(("s", "sh", "ch", "x", "o")) else "s")
     return (base, base, third, base, base, base)
 
 
-def _french_examples(phrase):
-    base = phrase.lower().removeprefix("to ").strip()
+def _usage_examples(code, infinitive, phrase, verb, rows):
+    word = (infinitive or "").strip()
+    if verb and word:
+        gift = _google_translate("a gift", code)
+        answer = _google_translate("an answer", code)
+        head = word[:1].upper() + word[1:]
+        examples = []
+        if gift:
+            examples.append({"phrase": f"{head} {gift}", "meaning": f"To {phrase} a gift"})
+        if answer:
+            examples.append({"phrase": f"{head} {answer}", "meaning": f"To {phrase} an answer"})
+        if code == "fr" and rows:
+            command = _french_command(word.lower()) or rows[2]["form"]
+            examples.append({
+                "phrase": f"{command[:1].upper() + command[1:]}-moi ça !",
+                "meaning": f"{phrase[:1].upper() + phrase[1:]} me that!",
+            })
+        elif code == "es" and rows:
+            command = _spanish_command(word.lower()) or rows[2]["form"]
+            examples.append({
+                "phrase": f"¡{command[:1].upper() + command[1:]}me eso!",
+                "meaning": f"{phrase[:1].upper() + phrase[1:]} me that!",
+            })
+        return examples
     examples = []
-    for prompt in (f"to {base} a gift", f"to {base} an answer", f"{base} me that"):
-        french = _google_translate(prompt, "fr")
-        if french:
-            examples.append({"phrase": french, "meaning": prompt[0].upper() + prompt[1:]})
+    for prompt in (f"a {phrase}", f"the {phrase}", f"my {phrase}"):
+        line = _google_translate(prompt, code)
+        if line:
+            examples.append({"phrase": line, "meaning": prompt[:1].upper() + prompt[1:]})
     return examples
 
 
