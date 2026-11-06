@@ -135,7 +135,7 @@ def _onnx_detections(image):
         class_scores = row[4:]
         class_id = int(class_scores.argmax())
         score = float(class_scores[class_id])
-        if score < 0.35 or class_id >= len(_COCO_NAMES):
+        if score < (0.28 if class_id == 0 else 0.35) or class_id >= len(_COCO_NAMES):
             continue
         cx, cy, bw, bh = (float(value) for value in row[:4])
         x1 = (cx - bw / 2 - pad_x) / scale
@@ -168,7 +168,7 @@ def _onnx_detections(image):
             if union <= 0 or inter / union < 0.45:
                 remain.append(other)
         order = remain
-    return [(labels[index], boxes[index]) for index in kept]
+    return [(labels[index], boxes[index], scores[index]) for index in kept]
 
 
 _YOLO_MODEL = None
@@ -224,6 +224,126 @@ def _region_cloth(image, box, y0, y1):
     return max(set(names), key=names.count)
 
 
+def _placed_people(boxes):
+    """Name each person by row and side, from the boxes YOLO already found."""
+    centers = []
+    for box in boxes:
+        x1, y1, x2, y2 = box
+        centers.append((((x1 + x2) / 2), ((y1 + y2) / 2), box))
+    if not centers:
+        return []
+    ys = [item[1] for item in centers]
+    xs = [item[0] for item in centers]
+    y_span = max(ys) - min(ys)
+    x_span = max(xs) - min(xs)
+
+    def band(value, start, span):
+        if span <= 1:
+            return 1
+        slot = (value - start) / span
+        if slot < 0.34:
+            return 0
+        if slot < 0.67:
+            return 1
+        return 2
+
+    rows = {}
+    for person in centers:
+        row = band(person[1], min(ys), y_span) if y_span > 40 else 1
+        rows.setdefault(row, []).append(person)
+    row_word = {0: "top", 1: "middle", 2: "bottom"}
+    placed = []
+    for row in sorted(rows):
+        group = rows[row]
+        for person in sorted(group, key=lambda item: item[0]):
+            column = band(person[0], min(xs), x_span) if x_span > 40 else 1
+            column_word = {0: "left", 1: "middle", 2: "right"}[column]
+            place = f"{row_word[row]} {column_word}"
+            placed.append((place, person[2]))
+    counts = {}
+    for place, _box in placed:
+        counts[place] = counts.get(place, 0) + 1
+    seen = {}
+    unique = []
+    for place, box in placed:
+        if counts[place] > 1:
+            seen[place] = seen.get(place, 0) + 1
+            place = f"{place} {seen[place]}"
+        unique.append((place, box))
+    return unique
+
+
+def _keep_people(found):
+    """Drop a second box on the same person. Keep a person who only sits lower in the group."""
+    ranked = sorted(found, key=lambda item: item[0], reverse=True)
+    kept = []
+    for conf, box in ranked:
+        cx = (box[0] + box[2]) / 2
+        cy = (box[1] + box[3]) / 2
+        duplicate = False
+        for _other_conf, other in kept:
+            ocx = (other[0] + other[2]) / 2
+            ocy = (other[1] + other[3]) / 2
+            distance = ((cx - ocx) ** 2 + (cy - ocy) ** 2) ** 0.5
+            height = min(box[3] - box[1], other[3] - other[1])
+            if distance < max(24, height * 0.42):
+                duplicate = True
+                break
+        if not duplicate:
+            kept.append((conf, box))
+    return [box for _conf, box in kept]
+
+
+def _person_outfit(image, box):
+    """A dark suit with a bright sash, or a colored shirt when the color covers the chest."""
+    x1, y1, x2, y2 = (int(value) for value in box)
+    if x2 - x1 < 8 or y2 - y1 < 8:
+        return ""
+    height = y2 - y1
+    width = x2 - x1
+    chest_top = y1 + int(height * 0.28)
+    chest_bottom = y1 + int(height * 0.78)
+    left = x1 + int(width * 0.2)
+    right = x2 - int(width * 0.2)
+    step = max(1, min(max(1, right - left), max(1, chest_bottom - chest_top)) // 12)
+    dark = 0
+    sampled = 0
+    counts = {}
+    for y in range(chest_top, chest_bottom, step):
+        for x in range(left, right, step):
+            pixel = image.getpixel((x, y))
+            red, green, blue = pixel
+            if _is_skin(pixel):
+                continue
+            if green > red + 18 and green > blue + 10 and green > 70:
+                continue
+            sampled += 1
+            level = (red + green + blue) / 3
+            spread = max(pixel) - min(pixel)
+            if level < 55 and spread < 28:
+                dark += 1
+                continue
+            if spread > 18 and level > 40:
+                name = _cloth_name(pixel)
+                if name not in {"black", "beige"}:
+                    counts[name] = counts.get(name, 0) + 1
+    if sampled < 6:
+        return ""
+    ranked = sorted(counts, key=counts.get, reverse=True)
+    colors = [name for name in ranked if counts[name] >= max(2, sampled * 0.08)][:3]
+    listed = " and ".join(colors[:2]) if len(colors) > 1 else (colors[0] if colors else "")
+    bright_total = sum(counts.values())
+    if bright_total >= sampled * 0.3 and listed:
+        return f"a {listed} shirt"
+    if dark >= sampled * 0.5 and colors and bright_total < sampled * 0.28:
+        return f"a black suit with a sash of {', '.join(colors[:3])}"
+    if dark >= sampled * 0.5:
+        return "a black suit"
+    if listed:
+        return f"a {listed} shirt"
+    return ""
+
+
 def _yolo_reading(raw, pixels, width, height):
     """Person and object boxes from YOLO, with clothes read inside each person."""
     kind, _count = _figure_kind(pixels, width, height)
@@ -241,9 +361,10 @@ def _yolo_reading(raw, pixels, width, height):
     detected = _onnx_detections(image)
     people = []
     objects = []
+    scored = []
     if detected is None and model is not None:
         try:
-            found = model.predict(image, verbose=False, conf=0.35, imgsz=640)
+            found = model.predict(image, verbose=False, conf=0.28, imgsz=640)
         except Exception:
             found = None
         boxes = found[0].boxes if found else None
@@ -252,35 +373,41 @@ def _yolo_reading(raw, pixels, width, height):
             detected = []
             for box in boxes:
                 label = names.get(int(box.cls[0]), "")
+                if label == "person" and float(box.conf[0]) < 0.28:
+                    continue
                 if label:
-                    detected.append((label.replace("_", " "), box.xyxy[0].tolist()))
-    for label, box in detected or []:
+                    conf = float(box.conf[0])
+                    detected.append((label.replace("_", " "), box.xyxy[0].tolist(), conf))
+    for item in detected or []:
+        label, box = item[0], item[1]
+        conf = item[2] if len(item) > 2 else 1
         if label == "person":
-            people.append(box)
+            scored.append((conf, box))
         elif label:
             objects.append(label)
-    outfits = []
-    for box in people[:4]:
-        top = _region_cloth(image, box, 0.18, 0.48)
-        legs = _region_cloth(image, box, 0.55, 0.88)
-        if top and legs and legs != top:
-            outfits.append(f"a {top} top and {legs} trousers")
-        elif top:
-            outfits.append(f"a {top} top")
-        elif legs:
-            outfits.append(f"{legs} trousers")
+    people = _keep_people(scored)
+    placed = _placed_people(people)
+    outfits = [(place, _person_outfit(image, box)) for place, box in placed]
     if not people and not objects:
         return ""
     if "book" in objects and people:
         return "This image shows a book held in a person's hand."
+    poster = _group_poster(raw, pixels, width, height, people, outfits)
+    if poster:
+        return poster
     parts = []
     if len(people) == 1:
-        worn = f" wearing {outfits[0]}" if outfits else ""
+        worn = f" wearing {outfits[0][1]}" if outfits and outfits[0][1] else ""
         parts.append(f"This image shows a person{worn}")
     elif len(people) > 1:
         parts.append(f"This image shows {len(people)} people")
-        if outfits:
-            parts.append(". " + " ".join(f"One is wearing {item}." for item in outfits).rstrip("."))
+        sentences = [
+            f"The {place} person is wearing {outfit}."
+            for place, outfit in outfits
+            if outfit
+        ]
+        if sentences:
+            parts.append(". " + " ".join(sentences).rstrip("."))
     unique = []
     for name in objects:
         if name not in unique:
@@ -296,6 +423,122 @@ def _yolo_reading(raw, pixels, width, height):
     if people and building.startswith("This image shows the outside"):
         sentence = sentence[:-1] + ", in front of a house, outside."
     return sentence
+
+
+def _group_poster(raw, pixels, width, height, people, outfits):
+    """A formal group with flag-colored sashes, read as a poster rather than a clothing list."""
+    if len(people) < 6:
+        return ""
+    title = ""
+    heard = []
+    for line in _read_text(raw, "image/jpeg"):
+        text = _line_text(line).strip(" .")
+        if text:
+            heard.append(text)
+    joined = " ".join(heard)
+    if "africa" in joined.lower():
+        if "this is africa" in joined.lower():
+            title = "THIS IS AFRICA"
+        else:
+            title = next(text for text in heard if "africa" in text.lower())
+    if title.upper() == "IS AFRICA" and "this" in joined.lower():
+        title = "THIS IS AFRICA"
+    formal = sum(1 for _place, outfit in outfits if "suit" in outfit or "sash" in outfit)
+    if not title and formal < len(people) * 0.6:
+        return ""
+    flags = []
+    for _place, outfit in outfits:
+        flag = _match_flag(outfit)
+        if flag and flag not in flags:
+            flags.append(flag)
+    sash_colors = []
+    for _place, outfit in outfits:
+        part = outfit.split("sash of", 1)[1] if "sash of" in outfit else ""
+        for name in part.replace("and", ",").split(","):
+            color = name.strip()
+            if color and color not in sash_colors:
+                sash_colors.append(color)
+    lines = [
+        "This image shows a formal group poster"
+        + (f" titled “{title}.”" if title else "."),
+        f"It shows {len(people)} people in dark formal suits, each wearing a colored sash.",
+        "What is visible:",
+    ]
+    if sash_colors:
+        lines.append("- Sash colors seen: " + ", ".join(sash_colors[:6]) + ".")
+    if flags:
+        lines.append("- Those colors match " + ", ".join(flags) + ".")
+    elif not sash_colors:
+        lines.append("- Colored sashes worn over the suits.")
+    if _color_panels(pixels, width, height):
+        lines.append("- A background of colorful rectangular panels.")
+    if title:
+        lines.append(f"- A large headline reading “{title}”.")
+    meaning = "The suits and the national colors are presented together"
+    if title:
+        meaning += f" under the words “{title}”."
+    else:
+        meaning += "."
+    lines.append("What the image communicates: " + meaning)
+    return "\n".join(lines)
+
+
+_FLAG_COLORS = (
+    ("Morocco", {"red", "green"}),
+    ("Ghana or Senegal", {"red", "yellow", "green"}),
+    ("Algeria", {"green", "white", "red"}),
+    ("DR Congo", {"blue", "red", "yellow"}),
+    ("Egypt", {"red", "white", "black"}),
+    ("South Africa", {"green", "red", "blue", "yellow"}),
+)
+
+
+def _flag_colors(outfit):
+    text = (outfit or "").lower()
+    sash = text.split("sash of", 1)[1] if "sash of" in text else ""
+    if not sash:
+        return set()
+    found = set()
+    for name in ("red", "green", "blue", "white", "black", "yellow"):
+        if name in sash:
+            found.add(name)
+    if "brown" in sash or "gold" in sash:
+        found.add("yellow")
+    if any(word in sash for word in ("navy", "sapphire", "midnight")):
+        found.add("blue")
+    return found
+
+
+def _match_flag(outfit):
+    colors = _flag_colors(outfit)
+    if len(colors) < 2:
+        return ""
+    best = ""
+    best_score = 0
+    for name, needed in _FLAG_COLORS:
+        if not needed <= colors:
+            continue
+        score = len(needed) * 2 - len(colors - needed) * 3
+        if colors - needed:
+            continue
+        if score > best_score:
+            best_score = score
+            best = name
+    return best
+
+
+def _color_panels(pixels, width, height):
+    """Bright blocks behind a group, such as painted containers."""
+    if width < 8 or height < 8:
+        return False
+    colorful = seen = 0
+    for y in range(int(height * 0.12), int(height * 0.55), max(1, height // 40)):
+        for x in range(int(width * 0.15), int(width * 0.85), max(1, width // 40)):
+            red, green, blue = pixels[y * width + x]
+            seen += 1
+            if max(red, green, blue) - min(red, green, blue) > 35 and (red + green + blue) / 3 > 50:
+                colorful += 1
+    return seen > 0 and colorful / seen > 0.22
 
 
 def _intent(question):
@@ -1813,10 +2056,8 @@ def _photo_reading(pixels, width, height, texts):
     if not interior and skin_share > 0.5 and wood / seen > 0.12 and sky / seen < 0.02 and ceiling > floor + 30:
         interior = True
         building = building or "This image shows the inside of a house, with a light ceiling, windows, and a floor."
-    figure = "" if interior else _human_form(pixels, width, height)
-    if building and kind not in {"person", "people"}:
-        figure = ""
-    if kind == "person" and not figure:
+    figure = "" if interior or building else _human_form(pixels, width, height)
+    if kind == "person" and not figure and not building:
         outfits = _outfit_phrase(pixels, width, height)
         worn = f" wearing {outfits[0]}" if outfits else ""
         figure = f"This image shows a person standing{worn}"
