@@ -1823,7 +1823,7 @@ def _language_codes(tail):
     if re.fullmatch(r"(?:every|all)(?:\s+languages?)?", tail):
         return list(_LANG_LABEL)
     codes = []
-    for name in re.split(r"\s*(?:,|and|&)\s*", tail):
+    for name in re.split(r"\s*(?:,|&|\band\b)\s*", tail):
         code = _LANG.get(name.strip())
         if code and code not in codes:
             codes.append(code)
@@ -2147,9 +2147,10 @@ def _usage_examples(code, infinitive, phrase, verb, rows, role=""):
         return examples
     if " " in (phrase or "").strip() or " " in (infinitive or "").strip():
         return []
+    if role != "adjective":
+        return []
     examples = []
-    prompts = (f"she is {phrase}", f"a {phrase} person") if role == "adjective" else (f"a {phrase}", f"the {phrase}")
-    for prompt in prompts:
+    for prompt in (f"she is {phrase}", f"a {phrase} person"):
         line = _google_translate(prompt, code)
         if line and _plain_letters(line) != _plain_letters(prompt):
             examples.append({"phrase": line, "meaning": prompt[:1].upper() + prompt[1:]})
