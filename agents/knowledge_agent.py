@@ -2634,6 +2634,100 @@ _GUIDES = (
 )
 
 
+def _needs_search_intro(goal):
+    """Technical tasks and long requests open with a search intro."""
+    words = re.findall(r"[a-z0-9]+", goal.lower())
+    technical = (
+        "arduino", "python", "code", "program", "programming", "circuit", "robot",
+        "install", "software", "website", "html", "css", "javascript", "repair",
+        "sensor", "library", "firmware", "bootloader", "api",
+    )
+    return any(word in words for word in technical) or len(words) >= 6
+
+
+_WHY = re.compile(r"^why\b", re.IGNORECASE)
+_SCIENCE = re.compile(
+    r"\b(sky|gravity|rain|boil|freeze|rust|photosynthesis|magnet|earth|moon|sun|light|"
+    r"heat|sound|atom|cell|plant|water|oxygen|carbon|force|energy|orbit|tide|electric|"
+    r"chemical|biology|physics|volcano|cloud|rainbow|friction|pressure|density|gas|"
+    r"liquid|solid|bacteria|dna|evolution|climate|temperature|wave|particle|electron|"
+    r"gravity|ice|steam|fire|star|planet|ocean|leaf|blood|heart|bone|muscle)\b",
+    re.IGNORECASE,
+)
+
+
+def why_reply(message):
+    """A why question. Ordinary reasons use a search intro; science links several facts."""
+    text = re.sub(r"\s+", " ", (message or "")).strip()
+    if not _WHY.match(text):
+        return None
+    facts = []
+    for note in _duckduckgo_snippets(text) or []:
+        spoken = _spoken_note(note) or note.strip()
+        if spoken and spoken not in facts and not _is_word_gloss(spoken, text):
+            facts.append(spoken)
+    if _SCIENCE.search(text):
+        for note in _wikipedia_snippet(text) or []:
+            spoken = _spoken_note(note) or note.strip()
+            if spoken and spoken not in facts and not _is_word_gloss(spoken, text):
+                facts.append(spoken)
+    if not facts:
+        return None
+    if not _SCIENCE.search(text):
+        return " ".join(facts[:2])
+    chain = _connect_facts(facts, text)
+    if len(chain) < 2:
+        return chain[0] if chain else facts[0]
+    opening = chain[0]
+    if not opening.lower().startswith("because"):
+        opening = "Because " + opening[0].lower() + opening[1:]
+    lines = [opening, "The facts connect like this:"]
+    lines.extend(f"{index}. {fact}" for index, fact in enumerate(chain, start=1))
+    shared = _shared_terms(chain)
+    if shared:
+        lines.append("They meet on " + ", ".join(shared[:3]) + ".")
+    return "\n\n".join(lines)
+
+
+def _is_word_gloss(fact, question):
+    start = (fact or "").lower()
+    return any(start.startswith(f"{word} is ") or start.startswith(f"{word}. ") for word in _content_words(question))
+
+
+def _connect_facts(facts, question):
+    """Order facts so each one shares a word with the previous fact."""
+    remaining = list(facts)
+    question_words = set(_content_words(question))
+
+    def closeness(fact):
+        return len(set(_content_words(fact)) & question_words)
+
+    remaining.sort(key=closeness, reverse=True)
+    chain = [remaining.pop(0)]
+    while remaining and len(chain) < 4:
+        previous = set(_content_words(chain[-1]))
+        best_index = None
+        best_shared = 0
+        for index, fact in enumerate(remaining):
+            shared = previous & set(_content_words(fact))
+            if len(shared) > best_shared:
+                best_shared = len(shared)
+                best_index = index
+        if best_index is None:
+            break
+        chain.append(remaining.pop(best_index))
+    return chain
+
+
+def _shared_terms(chain):
+    terms = []
+    for left, right in zip(chain, chain[1:]):
+        for word in set(_content_words(left)) & set(_content_words(right)):
+            if len(word) > 3 and word not in terms:
+                terms.append(word)
+    return terms
+
+
 def how_to_reply(message):
     """A how-to question, answered from the source that fits that kind of task."""
     match = _HOW.match(re.sub(r"\s+", " ", (message or "")).strip())
@@ -2658,6 +2752,13 @@ def how_to_reply(message):
             return "I couldn't confirm that from the public sources."
         return f"To {goal}, {spoken[0]}"
     lines = [f"To {goal}:"]
+    if _needs_search_intro(goal):
+        intro = next(
+            (note for note in (_spoken_note(item) for item in _duckduckgo_snippets(f"how to {goal}")) if note),
+            "",
+        )
+        if intro:
+            lines.append(intro)
     if page.get("steps"):
         lines.extend(f"{index}. {step}" for index, step in enumerate(page["steps"][:6], start=1))
     elif page.get("text"):

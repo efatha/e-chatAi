@@ -21,6 +21,7 @@ from agents.knowledge_agent import (
     wikidata_image,
     wikidata_research,
     how_to_reply,
+    why_reply,
     translate_reply,
     weather_reply,
     wikipedia_definition,
@@ -424,6 +425,15 @@ def answer_question(
         if from_books:
             from_books["response"] = _with_name(from_books["response"], username)
             return from_books
+
+    if text and not has_file:
+        reasoned = why_reply(text)
+        if reasoned:
+            return {
+                "response": _with_name(reasoned, username),
+                "source": "knowledge",
+                "provider": "duckduckgo",
+            }
 
     if text and not has_file and detect_lookup(text):
         defined = _definition_from_local_or_wikipedia(text, independent, username)
