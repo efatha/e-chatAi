@@ -460,6 +460,10 @@ const renderReply = (text, blocks) => {
 
 const formatMarked = (text) => escapeHtml(text)
   .replace(
+    /!\[([^\]\n]*)\]\((https:\/\/[^\s)"']+)\)/g,
+    '<img class="src-icon" alt="$1" src="$2">'
+  )
+  .replace(
     /\[([^\]\n]+)\]\((https:\/\/[^\s)"']+)\)/g,
     '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>'
   )

@@ -2635,7 +2635,7 @@ _GUIDES = (
 
 
 def how_to_reply(message):
-    """A how-to question, spoken as advice with a training link when we have one."""
+    """A how-to question, answered from the source that fits that kind of task."""
     match = _HOW.match(re.sub(r"\s+", " ", (message or "")).strip())
     if not match:
         return None
@@ -2644,17 +2644,465 @@ def how_to_reply(message):
     for keys, guide in _GUIDES:
         if any(key in lowered for key in keys):
             return guide
-    notes = _duckduckgo_snippets(message) or _wikipedia_snippet(goal)
-    spoken = [_spoken_note(note) for note in (notes or [])]
-    spoken = [note for note in spoken if note]
-    focused = [note for note in spoken if goal.lower() not in note.lower()[:70]]
-    spoken = focused or spoken
-    if not spoken:
-        return "I couldn't confirm that from the public sources."
-    first, *rest = spoken
-    if not rest:
-        return f"To {goal}, {first}"
-    return f"To {goal}, {first} {rest[0][0].upper() + rest[0][1:]}"
+    chosen = _how_sources(goal)
+    found = [hit for source in chosen if (hit := _source_page(goal, source))]
+    page = next((item for item in found if item.get("steps")), None)
+    if page is None:
+        page = next((item for item in found if item.get("text")), None)
+    if page is None and found:
+        page = found[0]
+    if page is None:
+        notes = _duckduckgo_snippets(message) or _wikipedia_snippet(goal)
+        spoken = [note for note in (_spoken_note(note) for note in (notes or [])) if note]
+        if not spoken:
+            return "I couldn't confirm that from the public sources."
+        return f"To {goal}, {spoken[0]}"
+    lines = [f"To {goal}:"]
+    if page.get("steps"):
+        lines.extend(f"{index}. {step}" for index, step in enumerate(page["steps"][:6], start=1))
+    elif page.get("text"):
+        lines.append(page["text"])
+    lines.append(f"[{page['name']}: {page['title']}]({page['url']})")
+    related = list(page.get("related") or [])
+    for item in found:
+        if item is page:
+            continue
+        related.append({"title": item["title"], "url": item["url"]})
+    seen = {page["url"]}
+    extras = []
+    for item in related:
+        if item.get("url") in seen:
+            continue
+        seen.add(item["url"])
+        extras.append(item)
+        if len(extras) == 5:
+            break
+    if extras:
+        lines.append("Other guides:")
+        lines.extend(f"- [{item['title']}]({item['url']})" for item in extras)
+    return "\n\n".join(lines)
+
+
+def _how_sources(goal):
+    """Pick the sites for this task. Practical questions start with a project guide and a video."""
+    text = f" {goal.lower()} "
+    if any(word in text for word in ("repair", "fix ", "ifix", "phone", "iphone", "screen", "battery")):
+        return [("ifixit.com", "iFixit", "page")]
+    if "arduino" in text:
+        return [("docs.arduino.cc", "Arduino", "page"), ("youtube.com/watch", "YouTube", "video")]
+    if "python" in text:
+        return [("docs.python.org", "Python documentation", "page")]
+    if any(word in text for word in ("website", "web page", "html", "css", "javascript")):
+        return [("developer.mozilla.org", "MDN", "page"), ("wikihow.com", "wikiHow", "page")]
+    if any(word in text for word in ("cook", "recipe", "rice", "bake", "boil", "fry")):
+        return [("wikihow.com", "wikiHow", "page"), ("youtube.com/watch", "YouTube", "video")]
+    if any(word in text for word in ("formula", "equation", "calculus", "theorem", "physics")):
+        return [("ocw.mit.edu", "MIT OpenCourseWare", "page")]
+    if any(word in text for word in ("robot", "build", "make ", "diy", "craft")):
+        return [
+            ("instructables.com", "Instructables", "page"),
+            ("wikihow.com", "wikiHow", "page"),
+            ("youtube.com/watch", "YouTube", "video"),
+        ]
+    return [("instructables.com", "Instructables", "page"), ("youtube.com/watch", "YouTube", "video")]
+
+
+def _source_page(goal, source):
+    site, name, kind = source
+    if kind == "video":
+        return _youtube_result(goal)
+    finders = {
+        "ifixit.com": _ifixit_result,
+        "wikihow.com": _wikihow_result,
+        "instructables.com": _instructables_result,
+        "docs.python.org": _python_docs_result,
+        "developer.mozilla.org": _mdn_result,
+        "docs.arduino.cc": _arduino_result,
+        "ocw.mit.edu": _ocw_result,
+    }
+    finder = finders.get(site)
+    hit = finder(goal) if finder else None
+    if not hit:
+        return None
+    if isinstance(hit, dict):
+        return hit
+    title, url = hit
+    steps = _wikihow_steps(url) if "wikihow.com" in url else []
+    return {
+        "kind": "page",
+        "name": name,
+        "title": title or name,
+        "url": url,
+        "steps": steps,
+        "text": "" if steps else _page_note(url),
+        "related": [],
+    }
+
+
+def _guide_headers():
+    return {"User-Agent": "Mozilla/5.0", "Accept-Language": "en-US,en;q=0.9"}
+
+
+def _goal_words(goal):
+    skip = {"with", "from", "your", "that", "this", "into", "using", "make", "build", "create", "program"}
+    return [word for word in re.findall(r"[a-z0-9]+", goal.lower()) if len(word) > 2 and word not in skip]
+
+
+def _youtube_result(goal):
+    try:
+        response = requests.get(
+            "https://www.youtube.com/results",
+            params={"search_query": f"how to {goal}"},
+            headers=_guide_headers(),
+            timeout=12,
+        )
+        response.raise_for_status()
+    except requests.RequestException:
+        return None
+    words = _goal_words(goal)
+    ranked = []
+    seen = set()
+    for video_id, title in re.findall(
+        r'"videoId":"([A-Za-z0-9_-]{11})".{0,700}?"text":"([^"\\]{6,140})"',
+        response.text,
+    ):
+        if video_id in seen:
+            continue
+        seen.add(video_id)
+        score = _title_score(title, words)
+        lowered = title.lower()
+        if any(skip in lowered for skip in ("cardboard", "#shorts", "one minute", "60 second")):
+            score -= 4
+        if "how to" in lowered:
+            score += 2
+        ranked.append((score, html.unescape(title), video_id))
+    ranked = [item for item in ranked if item[0] > 0]
+    ranked.sort(key=lambda item: item[0], reverse=True)
+    if not ranked:
+        return None
+    _score, title, video_id = ranked[0]
+    steps = _youtube_steps(video_id)
+    return {
+        "kind": "video",
+        "name": "YouTube",
+        "title": title,
+        "url": f"https://www.youtube.com/watch?v={video_id}",
+        "steps": steps,
+        "text": "",
+        "related": [
+            {"title": name, "url": f"https://www.youtube.com/watch?v={vid}"}
+            for _score, name, vid in ranked[1:6]
+        ],
+    }
+
+
+def _title_score(title, words):
+    lowered = title.lower()
+    return sum(1 for word in words if re.search(rf"\b{re.escape(word)}", lowered))
+
+
+def _youtube_steps(video_id):
+    excerpt = _youtube_excerpt(video_id) or _youtube_description(video_id)
+    if not excerpt:
+        return []
+    parts = [part.strip(" -") for part in re.split(r"(?<=[.!?])\s+|\n+", excerpt) if len(part.strip()) > 30]
+    return parts[:4]
+
+
+def _youtube_description(video_id):
+    try:
+        response = requests.get(
+            f"https://www.youtube.com/watch?v={video_id}",
+            headers=_guide_headers(),
+            timeout=12,
+        )
+        response.raise_for_status()
+    except requests.RequestException:
+        return ""
+    found = re.search(r'"shortDescription":"(.*?)"', response.text)
+    if not found:
+        return ""
+    try:
+        return json.loads(f'"{found.group(1)}"')
+    except ValueError:
+        return ""
+
+
+def _youtube_title(video_id):
+    try:
+        response = requests.get(
+            "https://www.youtube.com/oembed",
+            params={"url": f"https://www.youtube.com/watch?v={video_id}", "format": "json"},
+            headers=_guide_headers(),
+            timeout=8,
+        )
+        response.raise_for_status()
+        return (response.json().get("title") or "").strip()
+    except (requests.RequestException, ValueError):
+        return ""
+
+
+def _ifixit_result(goal):
+    words = _goal_words(goal)
+    query = "iPhone repair" if "phone" in goal.lower() else goal
+    try:
+        response = requests.get(
+            "https://www.ifixit.com/api/2.0/search/" + requests.utils.quote(query),
+            headers=_guide_headers(),
+            timeout=12,
+        )
+        response.raise_for_status()
+        results = response.json().get("results") or []
+    except (requests.RequestException, ValueError):
+        return None
+    best = None
+    for item in results:
+        if item.get("dataType") != "guide" or not item.get("url"):
+            continue
+        title = item.get("title") or ""
+        lowered = title.lower()
+        if any(skip in lowered for skip in ("cable", "usb", "charger") if skip not in goal.lower()):
+            continue
+        hits = sum(1 for word in words if re.search(rf"\b{re.escape(word)}", lowered))
+        if "iphone" in lowered or re.search(r"\bphone\b", lowered):
+            hits += 2
+        if any(part in lowered for part in ("screen", "battery", "display")) and "screen" not in goal.lower():
+            hits += 3
+        if best is None or hits > best[0]:
+            best = (hits, title, item["url"])
+    if not best or best[0] == 0:
+        return None
+    return best[1], best[2]
+
+
+def _wikihow_result(goal):
+    words = [word.capitalize() for word in re.findall(r"[A-Za-z0-9]+", goal)]
+    slugs = ["-".join(words)]
+    if words and words[0].lower() in {"build", "make", "create"}:
+        slugs.append("-".join(["Make" if words[0].lower() == "build" else "Build", *words[1:]]))
+        slugs.append("-".join(["Build", "a", "Simple", *words[1:]]))
+    seen = set()
+    for slug in slugs:
+        if not slug or slug in seen:
+            continue
+        seen.add(slug)
+        url = f"https://www.wikihow.com/{slug}"
+        try:
+            response = requests.get(url, headers=_guide_headers(), timeout=12)
+        except requests.RequestException:
+            continue
+        if response.status_code != 200 or "Client Challenge" in response.text[:500]:
+            continue
+        title = re.search(r"<title>(.*?)</title>", response.text, re.S)
+        name = re.sub(r"\s+", " ", html.unescape(title.group(1))).split(" - ")[0].strip() if title else slug.replace("-", " ")
+        if any(word in name.lower() for word in _goal_words(goal)):
+            return name, response.url
+    return None
+
+
+def _instructables_result(goal):
+    slug = "-".join(re.findall(r"[A-Za-z0-9]+", goal)).lower()
+    for url in (
+        f"https://www.instructables.com/{slug}/",
+        f"https://www.instructables.com/howto/{slug}/",
+    ):
+        try:
+            response = requests.get(url, headers=_guide_headers(), timeout=10)
+        except requests.RequestException:
+            continue
+        if response.status_code != 200 or "couldn't find" in response.text[:400].lower():
+            continue
+        title = re.search(r"<title>(.*?)</title>", response.text, re.S)
+        name = re.sub(r"\s+", " ", html.unescape(title.group(1) if title else "")).strip()
+        if name and name.lower() not in {"loading", "instructables"}:
+            return name, response.url
+    return None
+
+
+def _python_docs_result(goal):
+    url = "https://docs.python.org/3/tutorial/index.html"
+    if any(word in goal.lower() for word in ("file", "read", "write")):
+        url = "https://docs.python.org/3/tutorial/inputoutput.html"
+    elif any(word in goal.lower() for word in ("function", "def ")):
+        url = "https://docs.python.org/3/tutorial/controlflow.html"
+    elif any(word in goal.lower() for word in ("class", "object")):
+        url = "https://docs.python.org/3/tutorial/classes.html"
+    return "The Python Tutorial", url
+
+
+def _mdn_result(goal):
+    query = "getting started with the web" if "website" in goal.lower() else goal
+    try:
+        response = requests.get(
+            "https://developer.mozilla.org/api/v1/search",
+            params={"q": query, "locale": "en-US"},
+            headers=_guide_headers(),
+            timeout=12,
+        )
+        response.raise_for_status()
+        documents = response.json().get("documents") or []
+    except (requests.RequestException, ValueError):
+        return None
+    for item in documents:
+        path = item.get("mdn_url") or ""
+        title = item.get("title") or ""
+        if not path.startswith("/en-US/docs/") or "/MDN/Community" in path:
+            continue
+        if title:
+            return title, "https://developer.mozilla.org" + path
+    return None
+
+
+def _arduino_result(goal):
+    matches = _arduino_matches(goal)
+    if not matches:
+        return None
+    best = next((item for item in matches if item.get("steps")), matches[0])
+    related = [item for item in matches if item["url"] != best["url"]]
+    return {
+        "kind": "page",
+        "name": "Arduino",
+        "title": best["title"],
+        "url": best["url"],
+        "steps": best.get("steps") or [],
+        "text": "",
+        "related": [{"title": item["title"], "url": item["url"]} for item in related[:5]],
+    }
+
+
+_ARDUINO_CATALOG = None
+
+
+def _arduino_matches(goal):
+    global _ARDUINO_CATALOG
+    if _ARDUINO_CATALOG is None:
+        _ARDUINO_CATALOG = _load_arduino_catalog()
+    words = _goal_words(goal)
+    generic = set(words) <= {"use", "arduino", "using", "start", "started", "begin"}
+    ranked = []
+    for item in _ARDUINO_CATALOG:
+        score = _title_score(item["title"], words)
+        lowered = item["title"].lower()
+        if generic and "getting started" in lowered and "ide" in lowered and "cloud" not in lowered:
+            score += 8
+        if generic and lowered.startswith("use ") and "arduino" in lowered:
+            score += 4
+        if generic and any(word in lowered for word in ("memory", "partition", "aws", "business", "education", "linux", "cloud")):
+            score -= 6
+        if generic and any(mark in lowered for mark in ("mkr", "sara", "ctc", "bootloader", "nb 1500", "cloud agent")):
+            score -= 3
+        if score > 0:
+            ranked.append((score, dict(item)))
+    ranked.sort(key=lambda pair: pair[0], reverse=True)
+    chosen = [item for _score, item in ranked[:8]]
+    for item in chosen[:4]:
+        item["steps"] = _markdown_steps(item.get("source") or "")
+    return chosen
+
+
+def _load_arduino_catalog():
+    try:
+        response = requests.get("https://docs.arduino.cc/llms.txt", headers=_guide_headers(), timeout=20)
+        response.raise_for_status()
+    except requests.RequestException:
+        return []
+    entries = []
+    pattern = re.compile(
+        r"- \[([^\]]+)\]\((https://docs\.arduino\.cc/[^)]+)\): [^\n]*\n\s+Source: (\S+)"
+    )
+    for title, url, source in pattern.findall(response.text):
+        entries.append({"title": html.unescape(title).strip(), "url": url, "source": source})
+    return entries
+
+
+def _markdown_steps(url):
+    if not url:
+        return []
+    try:
+        response = requests.get(url, headers=_guide_headers(), timeout=12)
+        response.raise_for_status()
+    except requests.RequestException:
+        return []
+    steps = []
+    for line in response.text.splitlines():
+        match = re.match(r"^(?:\d+\.|[-*])\s+(.{24,220})$", line.strip())
+        if not match or match.group(1).startswith("["):
+            continue
+        step = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", match.group(1))
+        step = step.replace("**", "").replace("`", "").strip()
+        if step and step not in steps:
+            steps.append(step)
+        if len(steps) == 6:
+            break
+    return steps
+
+
+def _wikihow_steps(url):
+    try:
+        response = requests.get(url, headers=_guide_headers(), timeout=12)
+        response.raise_for_status()
+    except requests.RequestException:
+        return []
+    steps = []
+    for raw in re.findall(r'class="whb"[^>]*>(.*?)</(?:b|div|span)>', response.text, re.S):
+        step = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", html.unescape(raw))).strip()
+        if len(step) > 18 and step not in steps:
+            steps.append(step)
+        if len(steps) == 6:
+            break
+    return steps
+
+
+def _ocw_result(goal):
+    query = requests.utils.quote(goal)
+    return "MIT OpenCourseWare", f"https://ocw.mit.edu/search/?q={query}"
+
+
+def _page_note(url):
+    try:
+        response = requests.get(url, headers={"User-Agent": WIKI_USER_AGENT}, timeout=12)
+        response.raise_for_status()
+    except requests.RequestException:
+        return ""
+    text = re.sub(r"(?is)<(script|style|nav|footer|header).*?</\1>", " ", response.text)
+    paragraphs = re.findall(r"(?is)<p[^>]*>(.*?)</p>", text)
+    for raw in paragraphs:
+        clean = re.sub(r"<[^>]+>", "", html.unescape(raw))
+        clean = re.sub(r"\s+", " ", clean).strip()
+        if "contributor" in clean.lower() or "this guide" in clean.lower() or len(clean) < 80:
+            continue
+        note = _spoken_note(clean)
+        if note:
+            return note
+    return ""
+
+
+def _youtube_id(url):
+    found = re.search(r"(?:v=|youtu\.be/|shorts/)([A-Za-z0-9_-]{11})", url or "")
+    return found.group(1) if found else ""
+
+
+def _youtube_excerpt(video_id):
+    """A short English caption line, when YouTube publishes one for that video."""
+    try:
+        response = requests.get(
+            "https://www.youtube.com/api/timedtext",
+            params={"v": video_id, "lang": "en"},
+            headers={"User-Agent": WIKI_USER_AGENT},
+            timeout=8,
+        )
+        response.raise_for_status()
+    except requests.RequestException:
+        return ""
+    pieces = re.findall(r">([^<]{12,})", response.text or "")
+    words = []
+    for piece in pieces:
+        words.extend(html.unescape(piece).split())
+        if len(words) >= 40:
+            break
+    if len(words) < 8:
+        return ""
+    return _spoken_note(" ".join(words[:40]))
 
 
 def _spoken_note(note):

@@ -435,8 +435,14 @@ body{
   background: transparent;
   padding: 0;
 }
-.reply-prose {
-  background: var(--efa-sea);
+.src-icon {
+  width: 16px;
+  height: 16px;
+  vertical-align: -3px;
+  margin-right: 4px;
+}
+
+.reply-prose {  background: var(--efa-sea);
   color: #fff8f2;
   padding: 12px 16px;
   border-radius: 12px 12px 12px 2px;
