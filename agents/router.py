@@ -303,6 +303,20 @@ def answer_question(
             if translated.get("card"):
                 result["translation"] = translated["card"]
             return result
+        weather = weather_reply(text)
+        if weather:
+            result = {
+                "response": _with_name(weather["text"], username),
+                "source": "knowledge",
+                "provider": "open-meteo",
+            }
+            if weather.get("card"):
+                result["weather"] = weather["card"]
+                result["focus"] = {
+                    "place": weather["card"].get("query") or weather["card"].get("place"),
+                    "kind": "weather",
+                }
+            return result
         personal_question = _PERSONAL_QUESTION.match(text)
         if personal_question:
             question_word = personal_question.group(1).lower()
@@ -363,22 +377,6 @@ def answer_question(
         known = _local_knowledge(text, independent, username)
         if known:
             return known
-
-    if text and not has_file:
-        weather = weather_reply(text)
-        if weather:
-            result = {
-                "response": _with_name(weather["text"], username),
-                "source": "knowledge",
-                "provider": "open-meteo",
-            }
-            if weather.get("card"):
-                result["weather"] = weather["card"]
-                result["focus"] = {
-                    "place": weather["card"].get("query") or weather["card"].get("place"),
-                    "kind": "weather",
-                }
-            return result
 
     if text and not has_file:
         current = wikidata_current(text) or wikidata_research(text)

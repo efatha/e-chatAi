@@ -1142,7 +1142,7 @@ def _weather_card(place, tomorrow=False):
         },
     )
     if not payload:
-        return None
+        return _weather_card_met(place, tomorrow)
     current = payload.get("current") or {}
     hourly = payload.get("hourly") or {}
     daily = payload.get("daily") or {}
@@ -1194,6 +1194,117 @@ def _weather_card(place, tomorrow=False):
         card["clock"] = datetime.fromisoformat(dates[1]).strftime("%#d %B %Y" if os.name == "nt" else "%-d %B %Y")
     except (ValueError, IndexError, TypeError):
         card["clock"] = dates[1] if len(dates) > 1 else card["clock"]
+    return card
+
+
+def _met_symbol(code):
+    text = (code or "").lower()
+    night = "night" in text
+    if "thunder" in text:
+        return "Thunderstorm", "storm"
+    if "snow" in text or "sleet" in text:
+        return "Snow", "snow"
+    if "rain" in text or "drizzle" in text:
+        return "Rain", "rain"
+    if "fog" in text:
+        return "Foggy", "fog"
+    if "partly" in text:
+        return ("Mostly clear" if night else "Partly cloudy"), ("moon" if night else "cloud")
+    if "cloud" in text:
+        return "Overcast", "cloud"
+    if "clear" in text or "fair" in text:
+        return ("Clear" if night else "Sunny"), ("moon" if night else "sun")
+    return "Mixed", "cloud"
+
+
+def _weather_card_met(place, tomorrow=False):
+    """Used when Open-Meteo will not answer the hosted server."""
+    try:
+        response = requests.get(
+            "https://api.met.no/weatherapi/locationforecast/2.0/compact",
+            params={"lat": place["latitude"], "lon": place["longitude"]},
+            headers={"User-Agent": "e-Chat weather (https://e-chatai.onrender.com/)"},
+            timeout=15,
+        )
+        response.raise_for_status()
+        series = ((response.json() or {}).get("properties") or {}).get("timeseries") or []
+    except (requests.RequestException, ValueError):
+        return None
+    if not series:
+        return None
+    try:
+        from zoneinfo import ZoneInfo
+        zone = ZoneInfo(place.get("timezone") or "UTC")
+    except Exception:
+        zone = timezone.utc
+
+    def local(stamp):
+        moment = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+        return moment.astimezone(zone).replace(tzinfo=None)
+
+    first = series[0]
+    details = ((first.get("data") or {}).get("instant") or {}).get("details") or {}
+    if details.get("air_temperature") is None:
+        return None
+    moment = local(first["time"])
+    symbol = (((first.get("data") or {}).get("next_1_hours") or {}).get("summary") or {}).get("symbol_code")
+    condition, icon = _met_symbol(symbol)
+    temps = []
+    hours = []
+    for item in series[:24]:
+        item_details = ((item.get("data") or {}).get("instant") or {}).get("details") or {}
+        if item_details.get("air_temperature") is None:
+            continue
+        temps.append(item_details["air_temperature"])
+        if len(hours) < 6:
+            when = local(item["time"])
+            hour = when.strftime("%I").lstrip("0") or "12"
+            item_symbol = (((item.get("data") or {}).get("next_1_hours") or {}).get("summary") or {}).get("symbol_code")
+            _condition, item_icon = _met_symbol(item_symbol or symbol)
+            hours.append({
+                "time": f"{hour} {when.strftime('%p')}",
+                "temperature": round(item_details["air_temperature"]),
+                "rain": None,
+                "icon": item_icon,
+            })
+    hour = moment.strftime("%I").lstrip("0") or "12"
+    card = {
+        "place": place["label"],
+        "query": place["label"].split(",")[0],
+        "date": moment.strftime("%A, %-d %B %Y") if os.name != "nt" else moment.strftime("%A, %#d %B %Y"),
+        "clock": f"{hour}:{moment.strftime('%M')} {moment.strftime('%p')}",
+        "reading": "Live",
+        "temperature": round(details["air_temperature"]),
+        "condition": condition,
+        "icon": icon,
+        "high": round(max(temps)) if temps else None,
+        "low": round(min(temps)) if temps else None,
+        "rain": None,
+        "humidity": _humidity_word(details.get("relative_humidity")),
+        "hours": hours,
+    }
+    if not tomorrow:
+        return card
+    tomorrow_temps = []
+    for item in series:
+        when = local(item["time"])
+        if when.date() <= moment.date():
+            continue
+        item_details = ((item.get("data") or {}).get("instant") or {}).get("details") or {}
+        if item_details.get("air_temperature") is not None:
+            tomorrow_temps.append((when, item_details["air_temperature"], item))
+        if len(tomorrow_temps) >= 8:
+            break
+    if not tomorrow_temps:
+        return card
+    when, temperature, item = max(tomorrow_temps, key=lambda row: row[1])
+    symbol = (((item.get("data") or {}).get("next_1_hours") or {}).get("summary") or {}).get("symbol_code")
+    condition, icon = _met_symbol(symbol)
+    card["temperature"] = round(temperature)
+    card["condition"] = condition
+    card["icon"] = icon
+    card["reading"] = "Tomorrow"
+    card["clock"] = when.strftime("%#d %B %Y" if os.name == "nt" else "%-d %B %Y")
     return card
 
 
