@@ -1092,18 +1092,28 @@ def weather_reply(message):
     }
 
 
-def _weather_place(name):
-    try:
-        response = requests.get(
-            "https://geocoding-api.open-meteo.com/v1/search",
-            params={"name": name, "count": 1, "language": "en", "format": "json"},
-            headers={"User-Agent": WIKI_USER_AGENT},
-            timeout=12,
-        )
-        response.raise_for_status()
-        hits = (response.json() or {}).get("results") or []
-    except (requests.RequestException, ValueError):
+def _weather_get(url, params):
+    """Open-Meteo drops the educational client name. A normal browser header is accepted."""
+    headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
+    last = None
+    for _attempt in range(2):
+        try:
+            response = requests.get(url, params=params, headers=headers, timeout=15)
+            response.raise_for_status()
+            return response.json() or {}
+        except (requests.RequestException, ValueError) as error:
+            last = error
+    if last:
         return None
+    return None
+
+
+def _weather_place(name):
+    payload = _weather_get(
+        "https://geocoding-api.open-meteo.com/v1/search",
+        {"name": name, "count": 1, "language": "en", "format": "json"},
+    )
+    hits = (payload or {}).get("results") or []
     if not hits:
         return None
     hit = hits[0]
@@ -1119,24 +1129,19 @@ def _weather_place(name):
 
 
 def _weather_card(place, tomorrow=False):
-    try:
-        response = requests.get(
-            "https://api.open-meteo.com/v1/forecast",
-            params={
-                "latitude": place["latitude"],
-                "longitude": place["longitude"],
-                "timezone": place["timezone"],
-                "current": "temperature_2m,relative_humidity_2m,weather_code",
-                "hourly": "temperature_2m,precipitation_probability,weather_code",
-                "daily": "weather_code,temperature_2m_max,temperature_2m_min,sunrise,sunset",
-                "forecast_hours": 8,
-            },
-            headers={"User-Agent": WIKI_USER_AGENT},
-            timeout=12,
-        )
-        response.raise_for_status()
-        payload = response.json() or {}
-    except (requests.RequestException, ValueError):
+    payload = _weather_get(
+        "https://api.open-meteo.com/v1/forecast",
+        {
+            "latitude": place["latitude"],
+            "longitude": place["longitude"],
+            "timezone": place["timezone"],
+            "current": "temperature_2m,relative_humidity_2m,weather_code",
+            "hourly": "temperature_2m,precipitation_probability,weather_code",
+            "daily": "weather_code,temperature_2m_max,temperature_2m_min,sunrise,sunset",
+            "forecast_hours": 8,
+        },
+    )
+    if not payload:
         return None
     current = payload.get("current") or {}
     hourly = payload.get("hourly") or {}
