@@ -170,6 +170,8 @@ def _direct_fixture(text, focus):
     if re.search(r"\b(score|last played|last play|last match)\b", text, re.IGNORECASE):
         if earlier and not _subject(text):
             return _versus_answer(earlier)
+        if re.search(r"\band\b", text, re.IGNORECASE):
+            return _versus_answer(re.sub(r"\band\b", " vs ", text, count=1, flags=re.IGNORECASE))
         return _last_answer(text, focus)
     if re.search(r"\bwhen\b", text, re.IGNORECASE) and re.search(r"\bplay", text, re.IGNORECASE):
         return _when_answer(text)
@@ -1179,8 +1181,8 @@ def _read_event(raw, item):
     except ValueError:
         date, clock = stamp[:10], ""
     status = ((competition.get("status") or {}).get("type") or {}).get("name") or ""
-    home_score = home.get("score")
-    away_score = away.get("score")
+    home_score = _score_value(home.get("score"))
+    away_score = _score_value(away.get("score"))
     return {
         "title": f"{home_name} vs {away_name}".strip(),
         "date": date,
@@ -1188,10 +1190,10 @@ def _read_event(raw, item):
         "league": item.get("league") or "",
         "venue": (competition.get("venue") or {}).get("fullName") or "",
         "local": "Africa/Kampala" if clock else "",
-        "home_score": home_score.get("displayValue") if isinstance(home_score, dict) else None,
-        "away_score": away_score.get("displayValue") if isinstance(away_score, dict) else None,
+        "home_score": home_score,
+        "away_score": away_score,
         "finished": status == "STATUS_FULL_TIME",
-        "score": f"{home_score.get('displayValue')}–{away_score.get('displayValue')}" if isinstance(home_score, dict) and isinstance(away_score, dict) else "",
+        "score": f"{home_score}–{away_score}" if home_score not in (None, "") and away_score not in (None, "") else "",
         "home_logo": (home.get("team") or {}).get("logo") or "",
         "away_logo": (away.get("team") or {}).get("logo") or "",
         "id": raw.get("id") or "",
@@ -1200,15 +1202,36 @@ def _read_event(raw, item):
     }
 
 
-def _last_completed(name):
-    item = _espn_pick(name)
-    if not item:
-        return None
-    for raw in _espn_schedule(item):
-        event = _read_event(raw, item)
-        if event.get("finished") and event.get("home_score") not in (None, ""):
-            return event, {"name": item.get("displayName") or name, "league": item.get("league") or ""}
+def _score_value(score):
+    if isinstance(score, dict):
+        return score.get("displayValue")
+    if isinstance(score, list):
+        for part in score:
+            if isinstance(part, dict) and part.get("displayValue") not in (None, ""):
+                return part.get("displayValue")
+    if score not in (None, ""):
+        return score
     return None
+
+
+def _last_completed(name):
+    finished = []
+    seen = set()
+    for item in _espn_items(name) + [_world_cup_item(_espn_pick(name))]:
+        if not item or not item.get("id") or not item.get("league"):
+            continue
+        key = (str(item["id"]), item["league"])
+        if key in seen:
+            continue
+        seen.add(key)
+        for raw in _espn_schedule(item):
+            event = _read_event(raw, item)
+            if event.get("finished") and event.get("home_score") not in (None, ""):
+                finished.append((event, {"name": item.get("displayName") or name, "league": item.get("league") or ""}))
+    if not finished:
+        return None
+    event, team = max(finished, key=lambda pair: pair[0].get("date") or "")
+    return event, team
 
 
 def _hi(value):
@@ -1367,8 +1390,7 @@ def _matching_news(event, team):
 
 
 def _fixture_source(event):
-    link = event.get("link") or "https://www.espn.com/soccer/"
-    return f"Source: [ESPN team schedule]({link}), retrieved for this answer."
+    return "Source: [ESPN soccer](https://www.espn.com/soccer/), retrieved for this answer."
 
 
 def _team(name):
