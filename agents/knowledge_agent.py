@@ -303,7 +303,12 @@ def wikidata_research(message):
         return found or _never_won_reply(_clean_term(won.group(1)), _clean_term(won.group(2)))
     who = _WHO.match(text)
     if who:
-        return _research_who(who.group(1), text) or _who_directive(who.group(1), text)
+        found = _research_who(who.group(1), text)
+        if not found and re.match(r"^who\s+(?:is|was)\b", text, re.IGNORECASE):
+            found = _wiki_who(who.group(1))
+            if not found:
+                return {"text": f"I couldn't find a public record for {_clean_term(who.group(1))}."}
+        return found or _who_directive(who.group(1), text)
     when = _WHEN.match(text)
     if when:
         return _research_when(when.group(1), text) or _when_directive(when.group(1), text)
@@ -311,11 +316,18 @@ def wikidata_research(message):
 
 
 def _research_who(rest, original):
+    coach = _coach_answer(rest)
+    if coach:
+        return coach
     topic = _research_topic(rest)
     item = (_wikidata_item(topic) or _wikidata_item(rest)) if topic else None
     if item and _is_human(item):
         return _person_answer(item)
     if item:
+        for prop in ("P1308", "P35", "P6"):
+            people = _preferred_people(item, prop)
+            if people and _is_human(people[0]["entity"]):
+                return _person_answer(people[0]["entity"])
         for prop, phrase in _WHO_PROPS:
             people = _claim_people(item, prop)
             if people:
@@ -325,6 +337,14 @@ def _research_who(rest, original):
                     "text": _who_sentence(names, _label(item), original, phrase),
                     "commons": photo,
                 }
+    suggested = _suggested_item(topic or rest)
+    if suggested and suggested is not item:
+        if _is_human(suggested):
+            return _person_answer(suggested)
+        for prop in ("P1308", "P35", "P6"):
+            people = _preferred_people(suggested, prop)
+            if people and _is_human(people[0]["entity"]):
+                return _person_answer(people[0]["entity"])
     if "moon" in original.lower():
         landing = _wikidata_item("Apollo 11")
         crew = _claim_labels(landing, "P1029") or _claim_labels(landing, "P710")
@@ -339,6 +359,166 @@ def _research_who(rest, original):
             "commons": _commons_file(_claim_filename(item, "P18")),
         }
     return None
+
+
+def _coach_answer(rest):
+    if not re.search(r"\b(coach|manager)\b", rest or "", re.IGNORECASE):
+        return None
+    place = re.sub(r"^.*\b(?:of|for)\s+", "", rest, count=1, flags=re.IGNORECASE).strip(" ?.!")
+    place = _expand_name(_clean_term(place))
+    if not place:
+        return None
+    team = (
+        _wikidata_item(f"{place} national football team", "football")
+        or _wikidata_from_title(f"{place} national football team")
+        or _wikidata_from_title(f"{place} men's national football team")
+    )
+    people = _preferred_people(team, "P286")
+    if people and _is_human(people[0]["entity"]):
+        return _person_answer(people[0]["entity"])
+    return None
+
+
+def _suggested_item(term):
+    for guess in _name_guesses(term):
+        title = _wiki_suggest(guess)
+        item = _wikidata_from_title(title) or (_wikidata_item(title) if title else None)
+        if item:
+            return item
+    return None
+
+
+def _name_guesses(term):
+    text = (term or "").strip()
+    guesses = [text] if text else []
+    if text[:1].lower() == "c":
+        guesses.append("S" + text[1:])
+    elif text[:1].lower() == "s":
+        guesses.append("C" + text[1:])
+    return guesses
+
+
+def _wikidata_from_title(title):
+    if not title:
+        return None
+    try:
+        response = requests.get(
+            "https://en.wikipedia.org/w/api.php",
+            params={
+                "action": "query",
+                "titles": title,
+                "prop": "pageprops",
+                "ppprop": "wikibase_item",
+                "redirects": 1,
+                "format": "json",
+            },
+            headers={"User-Agent": WIKI_USER_AGENT},
+            timeout=12,
+        )
+        response.raise_for_status()
+        pages = ((response.json().get("query") or {}).get("pages") or {}).values()
+    except (requests.RequestException, ValueError):
+        return None
+    for page in pages:
+        item_id = (page.get("pageprops") or {}).get("wikibase_item")
+        if item_id:
+            return _wikidata_by_id(item_id)
+    return None
+
+
+def _wiki_suggest(term):
+    if not term:
+        return ""
+    titled = " ".join(part[:1].upper() + part[1:] if part else part for part in term.split())
+    for guess in (term, titled):
+        title = _opensearch_title(guess)
+        if title:
+            return title
+    return ""
+
+
+def _wiki_who(rest):
+    for guess in _name_guesses(rest):
+        title = _wiki_suggest(guess)
+        extract = _wiki_extract(title)
+        if not extract:
+            continue
+        sentence = extract.split(". ")[0].strip().rstrip(".")
+        if len(sentence) < 40:
+            continue
+        item = _wikidata_from_title(title)
+        photo = _commons_file(_claim_filename(item, "P18")) if item else None
+        result = {"text": sentence + "."}
+        if photo:
+            result["commons"] = photo
+        return result
+    return None
+
+
+def _wiki_extract(title):
+    if not title:
+        return ""
+    try:
+        response = requests.get(
+            "https://en.wikipedia.org/w/api.php",
+            params={
+                "action": "query",
+                "prop": "extracts",
+                "exintro": 1,
+                "explaintext": 1,
+                "redirects": 1,
+                "titles": title,
+                "format": "json",
+            },
+            headers={"User-Agent": WIKI_USER_AGENT},
+            timeout=12,
+        )
+        response.raise_for_status()
+        pages = ((response.json().get("query") or {}).get("pages") or {}).values()
+    except (requests.RequestException, ValueError):
+        return ""
+    for page in pages:
+        text = (page.get("extract") or "").strip()
+        if text and "may refer to" not in text.lower():
+            return text
+    return ""
+
+
+def _opensearch_title(term):
+    if not term:
+        return ""
+    try:
+        response = requests.get(
+            "https://en.wikipedia.org/w/api.php",
+            params={"action": "opensearch", "search": term, "limit": 1, "namespace": 0, "format": "json"},
+            headers={"User-Agent": WIKI_USER_AGENT},
+            timeout=12,
+        )
+        response.raise_for_status()
+        titles = response.json()[1]
+    except (requests.RequestException, ValueError, IndexError, KeyError):
+        return ""
+    return titles[0] if titles else ""
+
+
+def _preferred_people(entity, prop):
+    if not entity:
+        return []
+    ranked = []
+    for claim in (entity.get("claims") or {}).get(prop) or []:
+        rank = claim.get("rank")
+        if rank == "deprecated":
+            continue
+        value = ((claim.get("mainsnak") or {}).get("datavalue") or {}).get("value") or {}
+        item_id = value.get("id") if isinstance(value, dict) else None
+        if not item_id:
+            continue
+        person = _wikidata_by_id(item_id) or {}
+        if not _label(person) or _label(person) == "that subject":
+            continue
+        ranked.append((0 if rank == "preferred" else 1, {"name": _label(person), "entity": person}))
+    ranked.sort(key=lambda item: item[0])
+    return [person for _, person in ranked]
 
 
 def _research_when(rest, original):
@@ -429,7 +609,7 @@ _WORD_FIXES = {
     "developped": "developed",
     "developd": "developed",
     "fonded": "founded",
-    "desinged": "designed",
+    "coah": "coach",
     "winned": "won",
 }
 

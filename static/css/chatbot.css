@@ -515,6 +515,83 @@ body{
   padding-top: 4px;
   color: #f4f4f5;
 }
+.grad-text {
+  background: linear-gradient(to right, pink, cyan);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  font-weight: 700;
+}
+.match-board {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.match-board-title {
+  margin: 0;
+  font-size: 0.82rem;
+  color: #bdbdc2;
+}
+.match-row {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+}
+.match-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+}
+.match-logo {
+  width: 28px;
+  height: 28px;
+  object-fit: contain;
+  flex: none;
+}
+.team-chip,
+.score-chip {
+  background: linear-gradient(to right, pink, cyan);
+  color: #1a1a1a;
+  font-weight: 700;
+  line-height: 1.2;
+}
+.team-chip {
+  border-radius: 999px;
+  padding: 5px 10px;
+  white-space: normal;
+}
+.score-chip {
+  border-radius: 12px;
+  min-width: 3.2rem;
+  padding: 6px 8px;
+  text-align: center;
+}
+.match-detail {
+  margin: 0;
+  color: #bdbdc2;
+  font-size: 0.78rem;
+}
+.sports-portrait {
+  margin: 10px 0 0;
+}
+.sports-portrait img {
+  width: 132px;
+  height: 132px;
+  object-fit: contain;
+  border-radius: 16px;
+  background: linear-gradient(to right, pink, cyan);
+  padding: 6px;
+}
+.sports-portrait figcaption {
+  margin-top: 4px;
+  color: #bdbdc2;
+  font-size: 0.8rem;
+}
 .weather-top {
   display: flex;
   justify-content: space-between;

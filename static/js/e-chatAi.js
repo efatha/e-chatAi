@@ -253,6 +253,58 @@ const renderTranslation = (card) => {
   return root;
 };
 
+const renderSports = (card) => {
+  const root = document.createElement("div");
+  root.className = "match-board";
+  const title = document.createElement("p");
+  title.className = "match-board-title";
+  title.textContent = card.title || "Matches";
+  root.appendChild(title);
+  (card.matches || []).forEach((match) => {
+    const row = document.createElement("article");
+    row.className = "match-row";
+    const logo = (src, alt) => src
+      ? `<img class="match-logo" src="${escapeHtml(src)}" alt="">`
+      : "";
+    row.innerHTML = `
+      <div class="match-line">
+        ${logo(match.homeLogo, match.home)}
+        <span class="team-chip">${escapeHtml(match.home || "")}</span>
+      </div>
+      <span class="score-chip">${escapeHtml(match.score || "vs")}</span>
+      <div class="match-line">
+        ${logo(match.awayLogo, match.away)}
+        <span class="team-chip">${escapeHtml(match.away || "")}</span>
+      </div>
+      <p class="match-detail">${escapeHtml(match.detail || "")}</p>`;
+    root.appendChild(row);
+  });
+  return root;
+};
+
+const renderPortrait = (photo) => {
+  const src = photo && typeof photo === "object" ? photo.src : "";
+  if (!src) return null;
+  const figure = document.createElement("figure");
+  figure.className = "sports-portrait";
+  const image = document.createElement("img");
+  image.src = src;
+  image.alt = photo.alt || "";
+  image.addEventListener("error", () => figure.remove());
+  figure.appendChild(image);
+  if (photo.caption) {
+    const caption = document.createElement("figcaption");
+    caption.textContent = photo.caption;
+    figure.appendChild(caption);
+  }
+  return figure;
+};
+
+const highlightMarks = (html) => String(html || "").replace(
+  /⟦([^⟧]+)⟧/g,
+  '<span class="grad-text">$1</span>'
+);
+
 const paintDefinition = (text) => {
   const escaped = escapeHtml(String(text || "")).replace(/\n/g, "<br>");
   return escaped.replace(/(^|<br>|[.!?]\s*)- ([^<]+)/, (all, lead, body) =>
@@ -266,8 +318,8 @@ const renderStoredMessage = (item) => {
     ? '<img class="bot-avatar" src="/static/images/artificial-intelligence.gif" alt="">'
     : "";
   const body = /\[[^\]]+\]\(https?:\/\//.test(String(item.content || ""))
-    ? formatMarked(String(item.content || ""))
-    : paintDefinition(item.content || "");
+    ? highlightMarks(formatMarked(String(item.content || "")))
+    : highlightMarks(paintDefinition(item.content || ""));
   const element = createMsgElement(
     `${avatar}<div class="message-text">${body}</div>`,
     classes
@@ -278,6 +330,9 @@ const renderStoredMessage = (item) => {
   }
   if (item.commons) element.querySelector(".message-text").appendChild(renderCommons(item.commons));
   if (item.translation) element.querySelector(".message-text").appendChild(renderTranslation(item.translation));
+  if (item.sports) element.querySelector(".message-text").appendChild(renderSports(item.sports));
+  const storedPhoto = renderPortrait(item.portrait);
+  if (storedPhoto) element.querySelector(".message-text").appendChild(storedPhoto);
   eChatBody.insertBefore(element, eChatBody.querySelector(".echat-footer"));
 };
 
@@ -321,7 +376,7 @@ const ensureConversation = (firstMessage) => {
   return thread;
 };
 
-const addThreadMessage = (conversationId, role, content, dictionary, weather, commons, translation) => {
+const addThreadMessage = (conversationId, role, content, dictionary, weather, commons, translation, sports, portrait) => {
   const threads = readThreads();
   const index = threads.findIndex((thread) => thread.id === conversationId);
   if (index < 0) return;
@@ -331,6 +386,8 @@ const addThreadMessage = (conversationId, role, content, dictionary, weather, co
   if (weather) message.weather = weather;
   if (commons) message.commons = commons;
   if (translation) message.translation = translation;
+  if (sports) message.sports = sports;
+  if (portrait) message.portrait = portrait;
   threads[index].messages.push(message);
   threads[index].updatedAt = new Date().toISOString();
   const [updated] = threads.splice(index, 1);
@@ -531,19 +588,19 @@ const generateEchatResponse = async (incomingMsgDiv, conversationId, sentMessage
       const hasMarks = /\*[^*\n]+\*/.test(data.response) || /_[^_\n]+_/.test(data.response) || /\bp\. \d+/.test(data.response) || /\[[^\]]+\]\(https?:\/\//.test(data.response);
       if (hasCode) {
         const blocks = [];
-        msgElement.innerHTML = renderReply(data.response, blocks);
+        msgElement.innerHTML = highlightMarks(renderReply(data.response, blocks));
         msgElement.style.backgroundColor = "";
         msgElement.style.color = "";
         msgElement.style.padding = "";
         wireCopyButtons(msgElement, blocks);
       } else if (hasMarks) {
-        msgElement.innerHTML = formatMarked(data.response);
+        msgElement.innerHTML = highlightMarks(formatMarked(data.response));
         if (data.source === "independent") {
           msgElement.style.backgroundColor = "#397d92";
           msgElement.style.color = "#fff8f2";
         }
       } else {
-        msgElement.innerHTML = paintDefinition(data.response);
+        msgElement.innerHTML = highlightMarks(paintDefinition(data.response));
         if (data.source === "independent") {
           msgElement.style.backgroundColor = "#397d92";
           msgElement.style.color = "#fff8f2";
@@ -553,6 +610,8 @@ const generateEchatResponse = async (incomingMsgDiv, conversationId, sentMessage
         msgElement.classList.add("weather-bubble");
         msgElement.appendChild(renderWeather(data.weather));
       }
+      const sportsPhoto = renderPortrait(data.portrait);
+      if (sportsPhoto) msgElement.appendChild(sportsPhoto);
       if (data.translation) msgElement.appendChild(renderTranslation(data.translation));
       if (data.commons && data.commons.thumbnail) {
         const figure = document.createElement("figure");
@@ -581,11 +640,12 @@ const generateEchatResponse = async (incomingMsgDiv, conversationId, sentMessage
         figure.appendChild(caption);
         msgElement.appendChild(figure);
       }
-      if (data.portrait) {
+      if (typeof data.portrait === "string" && data.portrait) {
         const photo = document.createElement("img");
         photo.className = "creator-photo";
         photo.src = data.portrait;
-        photo.alt = "Efatha Rutakaza";
+        photo.alt = "";
+        photo.addEventListener("error", () => photo.remove());
         msgElement.prepend(photo);
         const projects = document.createElement("div");
         projects.className = "creator-projects";
@@ -623,7 +683,7 @@ const generateEchatResponse = async (incomingMsgDiv, conversationId, sentMessage
         }
       }
       finishMessage(incomingMsgDiv);
-      addThreadMessage(conversationId, "assistant", data.response, data.dictionary, data.weather, data.commons, data.translation);
+      addThreadMessage(conversationId, "assistant", data.response, data.dictionary, data.weather, data.commons, data.translation, data.sports, data.portrait);
       return;
     }
     throw new Error(data.error || "Backend returned no answer.");

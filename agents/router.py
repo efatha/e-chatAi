@@ -28,6 +28,7 @@ from agents.knowledge_agent import (
     wikipedia_summary,
 )
 from agents.reasoning_patterns import concept_terms, pattern_answer
+from agents.sports_agent import sports_reply
 
 _independent_agent = None
 _book_agent = None
@@ -60,9 +61,19 @@ def _remembered_focus(text, focus, conversation):
     return found
 
 
-def _reuse_subject(text, focus):
-    """A short follow-up keeps the last city, person, or topic."""
+def _reuse_subject(text, focus, conversation=None):
+    """A short follow-up keeps the last match, city, person, or topic."""
     lowered = re.sub(r"\s+", " ", (text or "").lower()).strip(" ?!.")
+    if lowered in {"and tomorrow", "tomorrow", "what about tomorrow", "and today", "today", "what about today"}:
+        if _recent_topic(conversation) == "sport":
+            when = "tomorrow" if "tomorrow" in lowered else "today"
+            return f"what football matches are listed {when}"
+    about = re.fullmatch(r"(?:what about|and) (.+)", lowered)
+    if about and (_recent_topic(conversation) == "ranking" or (focus or {}).get("kind") == "ranking"):
+        return f"fifa ranking of {about.group(1).strip()}"
+    if lowered in {"in africa", "africa", "in afcon", "afcon", "in caf"} and _recent_topic(conversation) == "sport":
+        when = "tomorrow" if _recent_mentions(conversation, "tomorrow") else ""
+        return f"what are the AFCON matches {when}".strip()
     place = (focus or {}).get("place")
     if place and lowered in {
         "and tomorrow", "tomorrow", "what about tomorrow", "tomorrows weather",
@@ -77,6 +88,34 @@ def _reuse_subject(text, focus):
     if topic and lowered in {"tell me more", "more", "and that", "what about it"}:
         return f"what is {topic}"
     return None
+
+
+def _recent_topic(conversation):
+    """The latest assistant answer decides whether a short follow-up is still about sport."""
+    for item in reversed(conversation or []):
+        if item.get("role") not in (None, "assistant"):
+            continue
+        content = str(item.get("content") or "").lower()
+        if not content:
+            continue
+        if "°c" in content or "overcast" in content or "open-meteo" in content:
+            return "weather"
+        if "world ranking" in content or "fifa world ranking" in content:
+            return "ranking"
+        if any(mark in content for mark in (
+            "football fixtures", "fixtures listed", "is scheduled for", "football match",
+            "listed as live", "listed match", "espn team",
+            "thesportsdb", "finished ", "not listed to play", "starting 11",
+        )):
+            return "sport"
+    return ""
+
+
+def _recent_mentions(conversation, word):
+    for item in reversed(conversation or []):
+        if word in str(item.get("content") or "").lower():
+            return True
+    return False
 
 
 def _capital_place(text):
@@ -198,7 +237,7 @@ def answer_question(
     has_file = bool(file and file.get("data"))
     text = (message or "").strip()
     focus = focus if isinstance(focus, dict) else {}
-    continued = _reuse_subject(text, _remembered_focus(text, focus, conversation))
+    continued = _reuse_subject(text, _remembered_focus(text, focus, conversation), conversation)
     if continued:
         text = continued
     if has_file:
@@ -316,6 +355,22 @@ def answer_question(
                     "place": weather["card"].get("query") or weather["card"].get("place"),
                     "kind": "weather",
                 }
+            return result
+        sport = sports_reply(text, focus=focus, conversation=conversation)
+        if sport:
+            result = {
+                "response": _with_name(sport["text"], username),
+                "source": "knowledge",
+                "provider": "thesportsdb",
+            }
+            if sport.get("focus"):
+                result["focus"] = {**focus, **sport["focus"]}
+            else:
+                result["focus"] = {**focus, "kind": "sport"}
+            if sport.get("card"):
+                result["sports"] = sport["card"]
+            if sport.get("portrait"):
+                result["portrait"] = sport["portrait"]
             return result
         personal_question = _PERSONAL_QUESTION.match(text)
         if personal_question:
