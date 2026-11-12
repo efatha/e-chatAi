@@ -125,6 +125,8 @@ def sports_reply(message, focus=None, conversation=None):
         return {"text": "That would be a prediction, not a result. I won't name a winner or a probability as a fact."}
     if re.search(r"\b(sign next|interested in|negotiat|free agents|transfer developments)\b", text, re.IGNORECASE):
         return _no_rumour(text, focus)
+    if re.search(r"\blive\b", text, re.IGNORECASE) and re.search(r"\bscore", text, re.IGNORECASE):
+        return _livescore_answer(text)
     board = _competition_board(text)
     if board:
         return board
@@ -768,12 +770,136 @@ def _afcon_when(text):
     return f"{date.isoformat()} at {clock}", date
 
 
+def _livescore_answer(text):
+    """Quote the score and clock printed on LiveScore. Do not fill in a missing one."""
+    names = _live_names(text)
+    events = _livescore_events("https://prod-public-api.livescore.com/v1/api/app/live/soccer/0?locale=en")
+    if re.search(r"\b(afcon|africa cup|african cup|\bcaf\b)\b", text, re.IGNORECASE):
+        events = [event for event in events if re.search(r"africa|caf", event.get("comp") or "", re.IGNORECASE)]
+        names = []
+    elif names:
+        events = [event for event in events if _names_in(names, event)]
+        if not events:
+            today = datetime.now(_KAMPALA).date()
+            upcoming = []
+            for offset in range(0, 4):
+                day = (today + timedelta(days=offset)).strftime("%Y%m%d")
+                upcoming.extend(
+                    event for event in _livescore_events(
+                        f"https://prod-public-api.livescore.com/v1/api/app/date/soccer/{day}/0?locale=en&MD=1"
+                    )
+                    if _names_in(names, event)
+                )
+            waiting = [event for event in upcoming if (event.get("time") or "").upper() == "NS"]
+            events = waiting[:1] or upcoming[:1]
+    if not events:
+        if re.search(r"\b(afcon|africa cup|african cup|\bcaf\b)\b", text, re.IGNORECASE):
+            who = "AFCON"
+        else:
+            who = " and ".join(names) if names else "right now"
+        return {
+            "text": (
+                f"LiveScore has no football score printed for {who}. I won't invent one.\n\n"
+                "Source: [LiveScore](https://www.livescore.com/en/), retrieved for this answer."
+            )
+        }
+    lines = [_livescore_line(event) for event in events[:12]]
+    if len(lines) > 1:
+        lines = [f"- {line}" for line in lines]
+    return {
+        "text": "\n".join(lines) + "\n\nSource: [LiveScore](https://www.livescore.com/en/), retrieved for this answer."
+    }
+
+
+def _live_names(text):
+    if re.search(r"\bvs\.?\b|\bversus\b|\band\b", text, re.IGNORECASE):
+        parts = re.split(r"\s+\bvs\.?\b\s+|\s+\bversus\b\s+|\s+\band\b\s+", text, maxsplit=1, flags=re.IGNORECASE)
+        names = [_subject(part) for part in parts]
+        return [name for name in names if name and _plain(name) not in {"now", "current"}]
+    name = re.sub(r"\b(now|current|currently|afcon|caf)\b", " ", _subject(text), flags=re.IGNORECASE)
+    name = re.sub(r"\s+", " ", name).strip()
+    if not name or _plain(name) in {"now", "current"}:
+        return []
+    return [name]
+
+
+def _names_in(names, event):
+    title = _plain(f"{event.get('home')} {event.get('away')}")
+    words = set(title.split())
+    for name in names:
+        asked = _plain(_ALIASES.get(_plain(name), name))
+        forms = {asked}
+        if asked == "dr congo":
+            forms.add("congo dr")
+        if not any(form and (form in title or set(form.split()) <= words) for form in forms):
+            return False
+    return True
+
+
+def _livescore_kickoff(stamp):
+    try:
+        kick = datetime.strptime(str(stamp)[:14], "%Y%m%d%H%M%S").replace(tzinfo=ZoneInfo("UTC")).astimezone(_KAMPALA)
+    except (TypeError, ValueError):
+        return ""
+    return kick.strftime("%Y-%m-%d at %H:%M Africa/Kampala")
+
+
+def _livescore_events(url):
+    try:
+        response = requests.get(
+            url,
+            headers={**_HEADERS, "Origin": "https://www.livescore.com", "Referer": "https://www.livescore.com/en/"},
+            timeout=15,
+        )
+        response.raise_for_status()
+        stages = response.json().get("Stages") or []
+    except (requests.RequestException, ValueError):
+        return []
+    listed = []
+    for stage in stages:
+        for event in stage.get("Events") or []:
+            home = ((event.get("T1") or [{}])[0].get("Nm") or "").strip()
+            away = ((event.get("T2") or [{}])[0].get("Nm") or "").strip()
+            if not home or not away:
+                continue
+            listed.append({
+                "home": home,
+                "away": away,
+                "home_score": event.get("Tr1"),
+                "away_score": event.get("Tr2"),
+                "time": str(event.get("Eps") or "").strip(),
+                "kickoff": _livescore_kickoff(event.get("Esd")),
+                "comp": stage.get("CompN") or stage.get("Cnm") or "",
+            })
+    return listed
+
+
+def _livescore_line(event):
+    home = _hi(event["home"])
+    away = _hi(event["away"])
+    if (event.get("time") or "").upper() == "NS":
+        when = event.get("kickoff") or "a later time"
+        return (
+            f"{home} vs {away} has not kicked off yet. "
+            f"LiveScore lists it for {when}, so there is no live score yet."
+        )
+    clock = f" {_hi(event['time'])}" if event.get("time") else ""
+    if event.get("home_score") not in (None, "") and event.get("away_score") not in (None, ""):
+        score = _hi(f"{event['home_score']}-{event['away_score']}")
+        return f"{home} {score} {away}{clock}"
+    return f"{home} vs {away}{clock}"
+
+
 def _afcon_line(item):
     score = f" finished {item['score']}" if item.get("score") else " has no score on the page"
     return f"{item['title']}{score} on {item.get('when') or 'an unpublished date'}."
 
 
 def _day_answer(text):
+    if re.search(r"\blive\b", text, re.IGNORECASE) and re.search(r"\bscore\b", text, re.IGNORECASE):
+        live = _livescore_answer(text)
+        if live:
+            return live
     team = _subject(text)
     general_live = bool(re.search(r"\blive\b", text, re.IGNORECASE)) and not team
     if re.search(r"\b(afcon|africa cup)\b", text, re.IGNORECASE) or general_live:
