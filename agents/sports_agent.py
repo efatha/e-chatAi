@@ -812,9 +812,19 @@ def _livescore_answer(text):
     lines = [_livescore_line(event) for event in events[:12]]
     if len(lines) > 1:
         lines = [f"- {line}" for line in lines]
-    return {
+    result = {
         "text": "\n".join(lines) + "\n\nSource: [LiveScore](https://www.livescore.com/en/), retrieved for this answer."
     }
+    if len(events) == 1:
+        event = events[0]
+        result["focus"] = {
+            "kind": "sport",
+            "team": names[0] if len(names) == 1 else event["home"],
+            "home": event["home"],
+            "away": event["away"],
+            "eid": event.get("eid") or "",
+        }
+    return result
 
 
 def _live_names(text):
@@ -884,10 +894,23 @@ def _livescore_events(url):
 def _scorer_answer(text, focus):
     """Name the players LiveScore lists as scoring, with the printed minute."""
     cleaned = re.sub(r"\b(scored|scorer|scorers|has|have|had)\b", " ", text, flags=re.IGNORECASE)
-    names = _live_names(cleaned) or ([focus.get("team")] if (focus or {}).get("team") else [])
-    events = _livescore_events("https://prod-public-api.livescore.com/v1/api/app/live/soccer/0?locale=en")
-    if names:
-        events = [event for event in events if _names_in(names, event)]
+    names = _live_names(cleaned)
+    focus = focus or {}
+    saved = None
+    if focus.get("eid") and focus.get("home") and focus.get("away"):
+        saved = {
+            "eid": str(focus["eid"]),
+            "home": focus["home"],
+            "away": focus["away"],
+            "time": "LIVE",
+        }
+    if not names and focus.get("team"):
+        names = [focus["team"]]
+    events = []
+    if not saved:
+        events = _livescore_events("https://prod-public-api.livescore.com/v1/api/app/live/soccer/0?locale=en")
+        if names:
+            events = [event for event in events if _names_in(names, event)]
     if not events and names:
         today = datetime.now(_KAMPALA).date()
         for offset in range(0, 2):
@@ -899,7 +922,7 @@ def _scorer_answer(text, focus):
                 if _names_in(names, event)
             )
     started = [event for event in events if (event.get("time") or "").upper() != "NS" and event.get("eid")]
-    event = (started or events or [None])[0]
+    event = saved or ((started or events or [None])[0])
     source = "\n\nSource: [LiveScore](https://www.livescore.com/en/), retrieved for this answer."
     if not event or not event.get("eid"):
         who = " and ".join(names) if names else "that match"
@@ -907,7 +930,9 @@ def _scorer_answer(text, focus):
     if (event.get("time") or "").upper() == "NS":
         return {"text": _livescore_line(event) + source, "focus": {"team": names[0] if names else event["home"]}}
     goals = _livescore_goals(event["eid"])
-    wanted = names[0] if len(names) == 1 else ""
+    wanted = ""
+    if len(names) == 1 and re.search(r"\bfor\b", text, re.IGNORECASE):
+        wanted = names[0]
     if wanted:
         side = 1 if _names_in([wanted], {"home": event["home"], "away": ""}) else 2
         goals = [goal for goal in goals if goal["side"] == side]
@@ -917,7 +942,11 @@ def _scorer_answer(text, focus):
             "text": f"LiveScore has not listed a goal for {who} in {event['home']} vs {event['away']} yet.{source}",
             "focus": {"team": wanted or event["home"]},
         }
-    lines = [f"{_hi(goal['name'])} scored at {_hi(goal['minute'])}" + (" (own goal)" if goal.get("own") else "") for goal in goals]
+    lines = [
+        f"{_hi(goal['name'])} scored for {_hi(event['home'] if goal['side'] == 1 else event['away'])} at {_hi(goal['minute'])}"
+        + (" (own goal)" if goal.get("own") else "")
+        for goal in goals
+    ]
     if len(lines) > 1:
         lines = [f"- {line}" for line in lines]
     return {
@@ -956,6 +985,8 @@ def _livescore_goals(event_id):
         minute = str(item.get("Min") or "").strip()
         extra = item.get("MinEx")
         clock = f"{minute}+{extra}" if extra else minute
+        if clock.isdigit():
+            clock += "'"
         player_side = item.get("Nm")
         goals.append({
             "name": item.get("Pn") or "Unnamed player",
