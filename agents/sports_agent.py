@@ -568,7 +568,7 @@ def _competition_board(text):
     if not headline:
         return None
     today = datetime.now(_KAMPALA).date()
-    day = today + timedelta(days=1) if re.search(r"\btomorrow\b", text, re.IGNORECASE) else today
+    day = today + timedelta(days=1) if _asked_day(text, today)[1] == "tomorrow" else today
     events = _espn_scoreboard("uefa.nations", day) + _espn_scoreboard("caf.nations_qual", day)
     chosen = _headline_events(events)
     if not chosen:
@@ -595,16 +595,20 @@ def _notable_score(event):
     return sum(1 for name in _NOTABLE if name in title)
 
 
+def _asked_day(text, today):
+    """Now and today stay on today's date. Tomorrow and 'will be' stay on the next day."""
+    later = re.search(r"\btomorrow\b|\bwill be\b|\bgoing to\b", text or "", re.IGNORECASE)
+    current = re.search(r"\b(?:now|today|tonight|currently)\b", text or "", re.IGNORECASE)
+    if later and not current:
+        return today + timedelta(days=1), "tomorrow"
+    if current:
+        return today, "today"
+    return None, "the latest matchweek"
+
+
 def _league_board(text, slug, label, source, headline=False):
     today = datetime.now(_KAMPALA).date()
-    asked = None
-    when = "the latest matchweek"
-    if re.search(r"\btomorrow\b", text, re.IGNORECASE):
-        asked = today + timedelta(days=1)
-        when = "tomorrow"
-    elif re.search(r"\btoday\b", text, re.IGNORECASE):
-        asked = today
-        when = "today"
+    asked, when = _asked_day(text, today)
     events = _espn_scoreboard(slug, asked) if asked else []
     if not asked:
         upcoming = _espn_scoreboard(slug, today + timedelta(days=1))
