@@ -125,6 +125,8 @@ def sports_reply(message, focus=None, conversation=None):
         return {"text": "That would be a prediction, not a result. I won't name a winner or a probability as a fact."}
     if re.search(r"\b(sign next|interested in|negotiat|free agents|transfer developments)\b", text, re.IGNORECASE):
         return _no_rumour(text, focus)
+    if re.search(r"\b(scored|scorer|scorers)\b", text, re.IGNORECASE):
+        return _scorer_answer(text, focus)
     if re.search(r"\blive\b", text, re.IGNORECASE) and re.search(r"\bscore", text, re.IGNORECASE):
         return _livescore_answer(text)
     board = _competition_board(text)
@@ -873,9 +875,96 @@ def _livescore_events(url):
                 "away_score": event.get("Tr2"),
                 "time": str(event.get("Eps") or "").strip(),
                 "kickoff": _livescore_kickoff(event.get("Esd")),
+                "eid": str(event.get("Eid") or ""),
                 "comp": stage.get("CompN") or stage.get("Cnm") or "",
             })
     return listed
+
+
+def _scorer_answer(text, focus):
+    """Name the players LiveScore lists as scoring, with the printed minute."""
+    cleaned = re.sub(r"\b(scored|scorer|scorers|has|have|had)\b", " ", text, flags=re.IGNORECASE)
+    names = _live_names(cleaned) or ([focus.get("team")] if (focus or {}).get("team") else [])
+    events = _livescore_events("https://prod-public-api.livescore.com/v1/api/app/live/soccer/0?locale=en")
+    if names:
+        events = [event for event in events if _names_in(names, event)]
+    if not events and names:
+        today = datetime.now(_KAMPALA).date()
+        for offset in range(0, 2):
+            day = (today + timedelta(days=offset)).strftime("%Y%m%d")
+            events.extend(
+                event for event in _livescore_events(
+                    f"https://prod-public-api.livescore.com/v1/api/app/date/soccer/{day}/0?locale=en&MD=1"
+                )
+                if _names_in(names, event)
+            )
+    started = [event for event in events if (event.get("time") or "").upper() != "NS" and event.get("eid")]
+    event = (started or events or [None])[0]
+    source = "\n\nSource: [LiveScore](https://www.livescore.com/en/), retrieved for this answer."
+    if not event or not event.get("eid"):
+        who = " and ".join(names) if names else "that match"
+        return {"text": f"LiveScore has no match listed for {who}, so I won't invent a scorer.{source}"}
+    if (event.get("time") or "").upper() == "NS":
+        return {"text": _livescore_line(event) + source, "focus": {"team": names[0] if names else event["home"]}}
+    goals = _livescore_goals(event["eid"])
+    wanted = names[0] if len(names) == 1 else ""
+    if wanted:
+        side = 1 if _names_in([wanted], {"home": event["home"], "away": ""}) else 2
+        goals = [goal for goal in goals if goal["side"] == side]
+    if not goals:
+        who = wanted or f"{event['home']} or {event['away']}"
+        return {
+            "text": f"LiveScore has not listed a goal for {who} in {event['home']} vs {event['away']} yet.{source}",
+            "focus": {"team": wanted or event["home"]},
+        }
+    lines = [f"{_hi(goal['name'])} scored at {_hi(goal['minute'])}" + (" (own goal)" if goal.get("own") else "") for goal in goals]
+    if len(lines) > 1:
+        lines = [f"- {line}" for line in lines]
+    return {
+        "text": "\n".join(lines) + source,
+        "focus": {"team": wanted or event["home"], "event": event["eid"]},
+    }
+
+
+def _livescore_goals(event_id):
+    try:
+        response = requests.get(
+            f"https://prod-public-api.livescore.com/v1/api/app/incidents/soccer/{event_id}?locale=en",
+            headers={**_HEADERS, "Origin": "https://www.livescore.com", "Referer": "https://www.livescore.com/en/"},
+            timeout=15,
+        )
+        response.raise_for_status()
+        groups = (response.json().get("Incs") or {}).values()
+    except (requests.RequestException, ValueError):
+        return []
+    items = [item for group in groups if isinstance(group, list) for item in group]
+    items.sort(key=lambda item: ((item.get("Min") or 0), (item.get("MinEx") or 0)))
+    last = [0, 0]
+    goals = []
+    for item in items:
+        score = item.get("Sc")
+        if not isinstance(score, list) or len(score) < 2:
+            continue
+        try:
+            current = [int(score[0]), int(score[1])]
+        except (TypeError, ValueError):
+            continue
+        if sum(current) <= sum(last):
+            last = current
+            continue
+        side = 1 if current[0] > last[0] else 2
+        minute = str(item.get("Min") or "").strip()
+        extra = item.get("MinEx")
+        clock = f"{minute}+{extra}" if extra else minute
+        player_side = item.get("Nm")
+        goals.append({
+            "name": item.get("Pn") or "Unnamed player",
+            "minute": clock,
+            "side": side,
+            "own": player_side not in (None, side),
+        })
+        last = current
+    return goals
 
 
 def _livescore_line(event):
