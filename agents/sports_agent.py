@@ -910,6 +910,8 @@ def _names_in(names, event):
         forms = {asked}
         if asked == "dr congo":
             forms.add("congo dr")
+        if asked == "congo" and ("dr" in words or "democratic" in words):
+            return False
         if not any(form and (form in title or set(form.split()) <= words) for form in forms):
             return False
     return True
