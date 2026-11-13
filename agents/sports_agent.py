@@ -156,7 +156,7 @@ def sports_reply(message, focus=None, conversation=None):
     if history:
         return history
     if re.search(r"\b(standing|standings|ranking|rankings)\b", text, re.IGNORECASE) or (
-        re.search(r"\btop\s+\d+\b|\btop teams\b", text, re.IGNORECASE) and _named_league(text)
+        re.search(r"\btop\s+\d+\b|\b\d+\s+top\b|\btop teams\b", text, re.IGNORECASE) and _named_league(text)
     ):
         table = _standing_answer(text)
         if table:
@@ -1327,9 +1327,9 @@ def _standing_answer(text):
 
 
 def _top_count(text):
-    found = re.search(r"\btop\s+(\d+)\b", text or "", re.IGNORECASE)
+    found = re.search(r"\btop\s+(\d+)\b|\b(\d+)\s+top\b", text or "", re.IGNORECASE)
     if found:
-        return min(int(found.group(1)), 50)
+        return min(int(found.group(1) or found.group(2)), 50)
     if re.search(r"\btop teams\b", text or "", re.IGNORECASE):
         return 10
     return None
@@ -1535,7 +1535,7 @@ def _standing_reply(entries, group_name, season, league, country, team_key=None,
     if not asked and require_team:
         return None
     place = _ordinal(asked["rank"]) if asked else ""
-    where = season if group_name.strip().lower() == season.strip().lower() else f"{group_name} of {season}"
+    where = season if group_name.strip().lower() in season.strip().lower() else f"{group_name} of {season}"
     lines = [row for _, row in rows]
     source = "\n\nSource: [ESPN soccer](https://www.espn.com/soccer/), retrieved for this answer."
     if asked:
