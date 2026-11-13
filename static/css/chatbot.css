@@ -522,6 +522,96 @@ body{
   color: transparent;
   font-weight: 700;
 }
+.chat-body .message.has-standings {
+  flex-wrap: wrap;
+  align-items: flex-start;
+}
+.chat-body .message.has-standings .standings {
+  flex: 1 0 100%;
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 4px;
+}
+.standings {
+  margin-top: 12px;
+  padding: 12px 8px 8px;
+  border-radius: 16px;
+  background: #1c1c22;
+  color: #f4f4f5;
+}
+.standings-title,
+.standings-group {
+  margin: 0;
+  text-align: center;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+.standings-title { font-size: 0.95rem; font-weight: 700; }
+.standings-group { margin-top: 6px; color: #bdbdc7; font-size: 0.78rem; }
+.standings-table {
+  width: 100%;
+  margin-top: 10px;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-size: 0.64rem;
+}
+.standings-table th,
+.standings-table td {
+  padding: 6px 1px;
+  overflow: hidden;
+}
+.standings-table th:nth-child(2),
+.standings-table td.club { width: 28%; }
+.standings-table th:last-child,
+.standings-table td.form { width: 78px; }
+.club-line span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.standings-table th {
+  color: #9a9aa3;
+  font-weight: 600;
+  text-align: center;
+  padding: 6px 4px;
+}
+.standings-table th:nth-child(2) { text-align: left; }
+.standings-table td {
+  text-align: center;
+  padding: 8px 4px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+.standings-table tr.asked td { background: #2a2a33; }
+.standings-table td.rank { color: #d7d7de; width: 1.4rem; }
+.standings-table td.club { text-align: left; font-weight: 700; white-space: nowrap; }
+.club-line { display: flex; align-items: center; gap: 8px; }
+.standings-table td.club img { width: 22px; height: 16px; object-fit: contain; }
+.standings-table td.pts { font-weight: 700; }
+.form { white-space: nowrap; }
+.form-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 13px;
+  height: 13px;
+  margin-left: 2px;
+  border-radius: 50%;
+  font-size: 9px;
+  line-height: 1;
+}
+.form-mark.win { background: #1f8a4c; color: #fff; }
+.form-mark.draw { background: #8d8d96; color: #fff; }
+.form-mark.loss { background: #d64545; color: #fff; }
+.form-mark.none { box-shadow: inset 0 0 0 1.5px #8d8d96; }
+.form-legend {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: #24242b;
+  color: #d5d5dc;
+  font-size: 0.78rem;
+}
+.form-legend p { display: flex; align-items: center; gap: 8px; margin: 4px 0; }
 .match-board {
   margin-top: 12px;
   display: flex;

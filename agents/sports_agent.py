@@ -155,6 +155,10 @@ def sports_reply(message, focus=None, conversation=None):
     history = _history(text)
     if history:
         return history
+    if re.search(r"\b(standing|standings|ranking|rankings)\b", text, re.IGNORECASE):
+        table = _standing_answer(text)
+        if table:
+            return table
     if re.search(r"\bfifa\b", text, re.IGNORECASE) and re.search(r"\b(ranking|rankings|standings|top\s+\d+)\b", text, re.IGNORECASE):
         return _fifa_rankings(text)
     if re.search(r"\b(news|dismissed|broke records)\b", text, re.IGNORECASE):
@@ -778,17 +782,35 @@ def _afcon_when(text):
     return f"{date.isoformat()} at {clock}", date
 
 
+def _asked_afcon(text):
+    return bool(re.search(r"\b(afcon|africa cup|african cup|\bcaf\b)\b", text or "", re.IGNORECASE))
+
+
+def _afcon_comp(name):
+    """True for the Africa Cup of Nations, never for a friendly."""
+    text = _plain(name)
+    if "friendly" in text or "friendlies" in text:
+        return False
+    return bool(re.search(r"\b(afcon|africa cup|african cup|caf)\b", text))
+
+
 def _livescore_answer(text):
     """Quote the score and clock printed on LiveScore. Do not fill in a missing one."""
     names = _live_names(text)
+    afcon = _asked_afcon(text)
     events = _livescore_events("https://prod-public-api.livescore.com/v1/api/app/live/soccer/0?locale=en")
-    if re.search(r"\b(afcon|africa cup|african cup|\bcaf\b)\b", text, re.IGNORECASE):
-        events = [event for event in events if re.search(r"africa|caf", event.get("comp") or "", re.IGNORECASE)]
-        names = []
-    elif names:
-        events = [event for event in events if _names_in(names, event)]
-        if not events:
+    if afcon:
+        events = [event for event in events if _afcon_comp(event.get("comp"))]
+    if names:
+        named = [event for event in events if _names_in(names, event)]
+        events = named
+        if not events and not afcon:
             events = _pick_team_fixture(_team_events(names))
+        elif not events and afcon:
+            events = [
+                event for event in _pick_team_fixture(_team_events(names))
+                if _afcon_comp(event.get("comp"))
+            ]
     if not events:
         if re.search(r"\b(afcon|africa cup|african cup|\bcaf\b)\b", text, re.IGNORECASE):
             who = "AFCON"
@@ -948,6 +970,8 @@ def _scorer_answer(text, focus):
             events = [event for event in events if _names_in(names, event)]
     if not events and names:
         events = _pick_team_fixture(_team_events(names))
+    if _asked_afcon(text):
+        events = [event for event in events if _afcon_comp(event.get("comp"))]
     event = saved or ((events or [None])[0])
     source = "\n\nSource: [LiveScore](https://www.livescore.com/en/), retrieved for this answer."
     if not event or not event.get("eid"):
@@ -1053,7 +1077,10 @@ def _yesterday_answer(text):
         f"https://prod-public-api.livescore.com/v1/api/app/date/soccer/{stamp}/0?locale=en&MD=1"
     )
     names = _live_names(text)
+    afcon = _asked_afcon(text)
     source = "\n\nSource: [LiveScore](https://www.livescore.com/en/), retrieved for this answer."
+    if afcon:
+        events = [event for event in events if _afcon_comp(event.get("comp"))]
     if names:
         matched = [event for event in events if _names_in(names, event)]
         finished = [event for event in matched if (event.get("time") or "").upper() in {"FT", "AET", "PEN"}]
@@ -1065,8 +1092,11 @@ def _yesterday_answer(text):
         focus = {"kind": "sport", "team": names[0], "home": event.get("home") or "", "away": event.get("away") or "", "eid": event.get("eid") or ""}
         return {"text": f"{_livescore_line(event)} That was yesterday, {day.isoformat()} (Africa/Kampala).{source}", "focus": focus}
     finished = [event for event in events if (event.get("time") or "").upper() in {"FT", "AET", "PEN"}]
-    africa = [event for event in finished if re.search(r"africa|caf", event.get("comp") or "", re.IGNORECASE)]
-    pool = africa or finished or events
+    if afcon:
+        pool = finished or events
+    else:
+        africa = [event for event in finished if re.search(r"africa|caf", event.get("comp") or "", re.IGNORECASE)]
+        pool = africa or finished or events
     shown = pool[:8]
     if not shown:
         return {"text": f"LiveScore has no football result listed for {day.isoformat()} (Africa/Kampala). I won't invent one.{source}"}
@@ -1132,7 +1162,7 @@ def _day_answer(text):
             "focus": {"team": team.title()},
         }
     if re.search(r"\bafcon\b", text, re.IGNORECASE):
-        events = [item for item in events if "africa" in (item.get("strLeague") or "").lower() or "afcon" in (item.get("strLeague") or "").lower()]
+        events = [item for item in events if _afcon_comp(item.get("strLeague"))]
     if re.search(r"\blive\b", text, re.IGNORECASE):
         events = [item for item in events if (item.get("strStatus") or "") not in {"", "NS", "FT", "AET", "PEN", "POST", "CANC"}]
         if not events:
@@ -1265,10 +1295,262 @@ def _history(text):
     return {"text": fact}
 
 
+def _standing_answer(text):
+    """A competition table for a standing, or the FIFA place when the question is a ranking."""
+    afcon = re.search(r"\b(afcon|caf|africa cup)\b", text, re.IGNORECASE)
+    country = _standing_name(text)
+    ranking = re.search(r"\bfifa\b|\branking\b", text, re.IGNORECASE)
+    if ranking and not afcon:
+        return _fifa_rankings(f"ranking of {country}" if country else text)
+    if country or afcon:
+        return _competition_standing(country, afcon=bool(afcon))
+    return None
+
+
+def _standing_name(text):
+    cleaned = re.sub(
+        r"\b(standing|standings|ranking|rankings|fifa|afcon|caf|africa|cup|nations|qualifying|group|table|in|men|women|mens|womens)\b",
+        " ",
+        text,
+        flags=re.IGNORECASE,
+    )
+    return _subject(cleaned)
+
+
+def _competition_standing(country, afcon=False):
+    """The group or league table that contains this country or club."""
+    if not country:
+        return {"text": "Name the country or team, and I will read its table. I won't invent the places."}
+    if afcon or _in_afcon(country):
+        table = _afcon_standing(country)
+        if table:
+            return table
+        if afcon:
+            return {"text": f"I couldn't find {country} in the AFCON qualifying table, so I won't invent a place.\n\nSource: [ESPN soccer](https://www.espn.com/soccer/), retrieved for this answer."}
+    item = _espn_pick(country)
+    if not item or not item.get("league"):
+        return {"text": f"I couldn't find a league table for {country}, so I won't invent one."}
+    return _league_standing(item) or {
+        "text": f"I couldn't find {item.get('displayName') or country} in its league table, so I won't invent a place.\n\nSource: [ESPN soccer](https://www.espn.com/soccer/), retrieved for this answer."
+    }
+
+
+def _in_afcon(country):
+    return _find_group(_afcon_groups(), country) is not None
+
+
+def _afcon_groups():
+    try:
+        response = requests.get(
+            "https://site.api.espn.com/apis/v2/sports/soccer/caf.nations_qual/standings",
+            headers=_HEADERS,
+            timeout=12,
+        )
+        response.raise_for_status()
+        return response.json().get("children") or []
+    except (requests.RequestException, ValueError):
+        return []
+
+
+def _find_group(groups, country, team_id=None):
+    wanted = str(team_id or "")
+    for group in groups:
+        table = group.get("standings") or {}
+        for entry in table.get("entries") or []:
+            team = entry.get("team") or {}
+            if wanted and str(team.get("id") or "") == wanted:
+                return group
+            label = team.get("displayName") or ""
+            if _names_in([country], {"home": label, "away": "", "comp": label}):
+                return group
+    return None
+
+
+def _afcon_standing(country):
+    groups = _afcon_groups()
+    if not groups:
+        return {"text": "I couldn't read the AFCON qualifying table just now, so I won't invent a place."}
+    group = _find_group(groups, country)
+    if not group:
+        return None
+    table = group.get("standings") or {}
+    return _standing_reply(
+        table.get("entries") or [],
+        group.get("name") or "Group",
+        table.get("seasonDisplayName") or "Africa Cup of Nations qualifying",
+        "caf.nations_qual",
+        country,
+        afcon=True,
+    )
+
+
+def _league_standing(item):
+    league = item.get("league") or ""
+    try:
+        response = requests.get(
+            f"https://site.api.espn.com/apis/v2/sports/soccer/{league}/standings",
+            headers=_HEADERS,
+            timeout=12,
+        )
+        response.raise_for_status()
+        groups = response.json().get("children") or []
+    except (requests.RequestException, ValueError):
+        return None
+    name = item.get("displayName") or ""
+    group = _find_group(groups, name, item.get("id"))
+    if not group:
+        return None
+    table = group.get("standings") or {}
+    title = table.get("seasonDisplayName") or group.get("name") or "League table"
+    label = group.get("name") or "Table"
+    if label.lower() in {"", "overall", title.lower()}:
+        label = title
+    return _standing_reply(table.get("entries") or [], label, title, league, name, item.get("id"))
+
+
+def _standing_reply(entries, group_name, season, league, country, team_key=None, afcon=False):
+    group_ids = {str((entry.get("team") or {}).get("id") or "") for entry in entries}
+    rows = []
+    asked = None
+    for entry in entries:
+        team = entry.get("team") or {}
+        label = team.get("displayName") or "Unknown"
+        if _plain(label) == "congo dr":
+            label = "DR Congo"
+        rank = _stat(entry, "rank")
+        try:
+            order = int(rank)
+        except ValueError:
+            order = 0
+        team_id = str(team.get("id") or "")
+        row = {
+            "rank": rank,
+            "team": label,
+            "logo": ((team.get("logos") or [{}])[0].get("href")) or "",
+            "cells": [
+                _stat(entry, "gamesPlayed"),
+                _stat(entry, "wins"),
+                _stat(entry, "ties"),
+                _stat(entry, "losses"),
+                _stat(entry, "pointsFor"),
+                _stat(entry, "pointsAgainst"),
+                _signed(_stat(entry, "pointDifferential")),
+                _stat(entry, "points"),
+            ],
+            "form": [],
+            "_id": team_id,
+        }
+        rows.append((order, row))
+        if (team_key and team_id == str(team_key)) or _names_in([country], {"home": label, "away": "", "comp": label}):
+            row["asked"] = True
+            asked = row
+    rows.sort(key=lambda item: item[0])
+    if len(rows) <= 8:
+        for _, row in rows:
+            row["form"] = _recent_form(league, row.pop("_id"), group_ids, afcon)
+    elif asked:
+        asked["form"] = _recent_form(league, asked.pop("_id"), group_ids, afcon)
+        for _, row in rows:
+            row.pop("_id", None)
+    else:
+        for _, row in rows:
+            row.pop("_id", None)
+    if not asked:
+        return None
+    place = _ordinal(asked["rank"])
+    where = season if group_name.strip().lower() == season.strip().lower() else f"{group_name} of {season}"
+    lines = [row for _, row in rows]
+    source = "\n\nSource: [ESPN soccer](https://www.espn.com/soccer/), retrieved for this answer."
+    return {
+        "text": f"{_hi(asked['team'])} is {_hi(place)} in {where}.{source}",
+        "focus": {"kind": "afcon-standing" if league == "caf.nations_qual" else "standing", "team": asked["team"]},
+        "card": {
+            "kind": "standing",
+            "title": "STANDINGS",
+            "group": group_name,
+            "rows": lines,
+        },
+    }
+
+
+def _ordinal(value):
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return str(value or "")
+    if 10 <= number % 100 <= 20:
+        suffix = "th"
+    else:
+        suffix = {1: "st", 2: "nd", 3: "rd"}.get(number % 10, "th")
+    return f"{number}{suffix}"
+
+
+def _signed(value):
+    text = str(value or "").strip()
+    if not text or text.startswith(("+", "-")):
+        return text
+    try:
+        number = int(text)
+    except ValueError:
+        return text
+    if number > 0:
+        return f"+{number}"
+    return str(number)
+
+
+def _recent_form(league, team_id, group_ids=None, afcon=False):
+    """Results in this table only. An AFCON table ignores friendlies."""
+    if not league or not team_id:
+        return []
+    allowed = {str(item) for item in (group_ids or set()) if item}
+    try:
+        response = requests.get(
+            f"https://site.api.espn.com/apis/site/v2/sports/soccer/{league}/teams/{team_id}/schedule",
+            headers=_HEADERS,
+            timeout=12,
+        )
+        response.raise_for_status()
+        events = response.json().get("events") or []
+    except (requests.RequestException, ValueError):
+        return []
+    played = []
+    for event in events:
+        competition = ((event.get("competitions") or [None])[0]) or {}
+        state = (((competition.get("status") or {}).get("type") or {}).get("state")) or ""
+        if state != "post":
+            continue
+        label = f"{event.get('name') or ''} {((event.get('season') or {}).get('displayName')) or ''}"
+        if afcon and (not _afcon_comp(label) or re.search(r"friendly", label, re.IGNORECASE)):
+            continue
+        sides = competition.get("competitors") or []
+        side_ids = {str((side.get("team") or {}).get("id") or "") for side in sides}
+        if allowed and not side_ids <= allowed:
+            continue
+        mine = next((side for side in sides if str((side.get("team") or {}).get("id")) == str(team_id)), None)
+        if not mine:
+            continue
+        if mine.get("winner") is True:
+            played.append("W")
+        elif any(side.get("winner") is True for side in sides):
+            played.append("L")
+        else:
+            played.append("D")
+    return list(reversed(played[-5:]))
+
+
+def _stat(entry, key):
+    for stat in entry.get("stats") or []:
+        if stat.get("name") == key or stat.get("abbreviation") == key:
+            return stat.get("displayValue") or ""
+    return ""
+
+
 def _fifa_rankings(text):
     count_match = re.search(r"\btop\s+(\d+)\b", text, re.IGNORECASE)
     named = re.search(r"\branking of\s+(.+)$", text, re.IGNORECASE)
     country = named.group(1).strip() if named else ""
+    if country and re.search(r"\btop\s+\d+\b", country, re.IGNORECASE):
+        country = ""
     count = min(int(count_match.group(1)), 50) if count_match else (200 if country else 10)
     gender = 2 if re.search(r"\bwomen\b", text, re.IGNORECASE) else 1
     try:

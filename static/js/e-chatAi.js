@@ -253,7 +253,65 @@ const renderTranslation = (card) => {
   return root;
 };
 
+const formMark = (mark) => {
+  const kind = mark === "W" ? "win" : mark === "D" ? "draw" : mark === "L" ? "loss" : "none";
+  const glyph = mark === "W" ? "✓" : mark === "D" ? "–" : mark === "L" ? "×" : "";
+  return `<span class="form-mark ${kind}" aria-label="${kind}">${glyph}</span>`;
+};
+
+const renderStanding = (card) => {
+  const root = document.createElement("section");
+  root.className = "standings";
+  const head = document.createElement("header");
+  head.innerHTML = `<p class="standings-title">STANDINGS</p><p class="standings-group">${escapeHtml(card.group || "")}</p>`;
+  root.appendChild(head);
+  const table = document.createElement("table");
+  table.className = "standings-table";
+  const showForm = (card.rows || []).some((row) => (row.form || []).length);
+  table.innerHTML = `
+    <thead>
+      <tr>
+        <th></th><th>Club</th>
+        <th>MP</th><th>W</th><th>D</th><th>L</th><th>GF</th><th>GA</th><th>GD</th><th>Pts</th>
+        ${showForm ? "<th>Last 5</th>" : ""}
+      </tr>
+    </thead>`;
+  const body = document.createElement("tbody");
+  (card.rows || []).forEach((row) => {
+    const cells = row.cells || [];
+    const form = (row.form || []).slice(-5);
+    const formCell = !showForm
+      ? ""
+      : form.length
+        ? `<td class="form">${form.concat(Array(Math.max(0, 5 - form.length)).fill("")).map(formMark).join("")}</td>`
+        : `<td class="form"></td>`;
+    const line = document.createElement("tr");
+    if (row.asked) line.className = "asked";
+    line.innerHTML = `
+      <td class="rank">${escapeHtml(row.rank || "")}</td>
+      <td class="club"><span class="club-line"><img src="${escapeHtml(row.logo || "")}" alt="" onerror="this.remove()"><span>${escapeHtml(row.team || "")}</span></span></td>
+      ${cells.map((value, index) => `<td${index === 7 ? ' class="pts"' : ""}>${escapeHtml(value || "")}</td>`).join("")}
+      ${formCell}</tr>`;
+    body.appendChild(line);
+  });
+  table.appendChild(body);
+  root.appendChild(table);
+  if (showForm) {
+    const legend = document.createElement("div");
+    legend.className = "form-legend";
+    legend.innerHTML = `
+      <p>Last 5 matches</p>
+      <p>${formMark("W")} Win</p>
+      <p>${formMark("D")} Draw</p>
+      <p>${formMark("L")} Loss</p>
+      <p>${formMark("")} Not played</p>`;
+    root.appendChild(legend);
+  }
+  return root;
+};
+
 const renderSports = (card) => {
+  if (card && card.kind === "standing") return renderStanding(card);
   const root = document.createElement("div");
   root.className = "match-board";
   const title = document.createElement("p");
@@ -330,7 +388,10 @@ const renderStoredMessage = (item) => {
   }
   if (item.commons) element.querySelector(".message-text").appendChild(renderCommons(item.commons));
   if (item.translation) element.querySelector(".message-text").appendChild(renderTranslation(item.translation));
-  if (item.sports) element.querySelector(".message-text").appendChild(renderSports(item.sports));
+  if (item.sports && item.sports.kind === "standing") {
+    element.classList.add("has-standings");
+    element.appendChild(renderSports(item.sports));
+  } else if (item.sports) element.querySelector(".message-text").appendChild(renderSports(item.sports));
   const storedPhoto = renderPortrait(item.portrait);
   if (storedPhoto) element.querySelector(".message-text").appendChild(storedPhoto);
   eChatBody.insertBefore(element, eChatBody.querySelector(".echat-footer"));
@@ -609,6 +670,10 @@ const generateEchatResponse = async (incomingMsgDiv, conversationId, sentMessage
       if (data.weather) {
         msgElement.classList.add("weather-bubble");
         msgElement.appendChild(renderWeather(data.weather));
+      }
+      if (data.sports && data.sports.kind === "standing") {
+        incomingMsgDiv.classList.add("has-standings");
+        incomingMsgDiv.appendChild(renderSports(data.sports));
       }
       const sportsPhoto = renderPortrait(data.portrait);
       if (sportsPhoto) msgElement.appendChild(sportsPhoto);

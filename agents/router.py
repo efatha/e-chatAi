@@ -69,6 +69,8 @@ def _reuse_subject(text, focus, conversation=None):
             when = "tomorrow" if "tomorrow" in lowered else "today"
             return f"what football matches are listed {when}"
     about = re.fullmatch(r"(?:what about|and) (.+)", lowered)
+    if about and (focus or {}).get("kind") == "afcon-standing":
+        return f"what is the {about.group(1).strip()} AFCON standing"
     if about and (_recent_topic(conversation) == "ranking" or (focus or {}).get("kind") == "ranking"):
         return f"fifa ranking of {about.group(1).strip()}"
     if lowered in {"in africa", "africa", "in afcon", "afcon", "in caf"} and _recent_topic(conversation) == "sport":
