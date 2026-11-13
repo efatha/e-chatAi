@@ -273,7 +273,7 @@ const renderStanding = (card) => {
       <tr>
         <th></th><th>Club</th>
         <th>MP</th><th>W</th><th>D</th><th>L</th><th>GF</th><th>GA</th><th>GD</th><th>Pts</th>
-        ${showForm ? "<th>Last 5</th>" : ""}
+        ${showForm ? "<th>Form</th>" : ""}
       </tr>
     </thead>`;
   const body = document.createElement("tbody");
@@ -283,7 +283,7 @@ const renderStanding = (card) => {
     const formCell = !showForm
       ? ""
       : form.length
-        ? `<td class="form">${form.concat(Array(Math.max(0, 5 - form.length)).fill("")).map(formMark).join("")}</td>`
+        ? `<td class="form">${form.map(formMark).join("")}</td>`
         : `<td class="form"></td>`;
     const line = document.createElement("tr");
     if (row.asked) line.className = "asked";
@@ -300,11 +300,10 @@ const renderStanding = (card) => {
     const legend = document.createElement("div");
     legend.className = "form-legend";
     legend.innerHTML = `
-      <p>Last 5 matches</p>
+      <p>Last matches</p>
       <p>${formMark("W")} Win</p>
       <p>${formMark("D")} Draw</p>
-      <p>${formMark("L")} Loss</p>
-      <p>${formMark("")} Not played</p>`;
+      <p>${formMark("L")} Loss</p>`;
     root.appendChild(legend);
   }
   return root;

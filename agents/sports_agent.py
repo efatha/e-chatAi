@@ -155,7 +155,9 @@ def sports_reply(message, focus=None, conversation=None):
     history = _history(text)
     if history:
         return history
-    if re.search(r"\b(standing|standings|ranking|rankings)\b", text, re.IGNORECASE):
+    if re.search(r"\b(standing|standings|ranking|rankings)\b", text, re.IGNORECASE) or (
+        re.search(r"\btop\s+\d+\b|\btop teams\b", text, re.IGNORECASE) and _named_league(text)
+    ):
         table = _standing_answer(text)
         if table:
             return table
@@ -1295,6 +1297,13 @@ def _history(text):
     return {"text": fact}
 
 
+def _named_league(text):
+    for pattern, slug, label, _source in _COMPETITIONS:
+        if re.search(pattern, text or "", re.IGNORECASE):
+            return slug, label
+    return None
+
+
 def _standing_answer(text):
     """A competition table for a standing, or the FIFA place when the question is a ranking."""
     afcon = re.search(r"\b(afcon|caf|africa cup)\b", text, re.IGNORECASE)
@@ -1302,14 +1311,78 @@ def _standing_answer(text):
     ranking = re.search(r"\bfifa\b|\branking\b", text, re.IGNORECASE)
     if ranking and not afcon:
         return _fifa_rankings(f"ranking of {country}" if country else text)
+    league = _named_league(text)
+    if league and not (afcon and league[0] != "caf.nations_qual"):
+        slug, label = league
+        if slug != "caf.nations_qual" or afcon:
+            limit = _top_count(text)
+            return _slug_standing(slug, label, country, limit)
     if country or afcon:
         return _competition_standing(country, afcon=bool(afcon))
     return None
 
 
+def _top_count(text):
+    found = re.search(r"\btop\s+(\d+)\b", text or "", re.IGNORECASE)
+    if found:
+        return min(int(found.group(1)), 50)
+    if re.search(r"\btop teams\b", text or "", re.IGNORECASE):
+        return 10
+    return None
+
+
+def _slug_standing(slug, label, country, limit):
+    """The named league's table, on the same board as a country group."""
+    try:
+        response = requests.get(
+            f"https://site.api.espn.com/apis/v2/sports/soccer/{slug}/standings",
+            headers=_HEADERS,
+            timeout=12,
+        )
+        response.raise_for_status()
+        groups = response.json().get("children") or []
+    except (requests.RequestException, ValueError):
+        return {"text": f"I couldn't read the {label} table just now, so I won't invent a place."}
+    source = "\n\nSource: [ESPN soccer](https://www.espn.com/soccer/), retrieved for this answer."
+    item = _espn_pick(country) if country else None
+    group = _find_group(groups, country, (item or {}).get("id")) if country else None
+    if country and not group:
+        return {"text": f"I couldn't find {country} in the {label} table, so I won't invent a place.{source}"}
+    if not group:
+        group = groups[0] if groups else None
+    if not group:
+        return {"text": f"The {label} table came back empty, so I won't invent the places.{source}"}
+    table = group.get("standings") or {}
+    season = table.get("seasonDisplayName") or label
+    entries = list(table.get("entries") or [])
+    if limit:
+        entries = sorted(entries, key=lambda entry: int(_stat(entry, "rank") or 0))[:limit]
+        if item:
+            wanted = str(item.get("id"))
+            if not any(str((entry.get("team") or {}).get("id")) == wanted for entry in entries):
+                extra = next(
+                    (entry for entry in (table.get("entries") or []) if str((entry.get("team") or {}).get("id")) == wanted),
+                    None,
+                )
+                if extra:
+                    entries.append(extra)
+    group_name = group.get("name") or label
+    if group_name.lower() in {"overall", season.lower(), "league phase"}:
+        group_name = label
+    return _standing_reply(
+        entries,
+        group_name,
+        season,
+        slug,
+        country,
+        (item or {}).get("id"),
+        require_team=bool(country),
+    )
+
+
 def _standing_name(text):
     cleaned = re.sub(
-        r"\b(standing|standings|ranking|rankings|fifa|afcon|caf|africa|cup|nations|qualifying|group|table|in|men|women|mens|womens)\b",
+        r"\b(standing|standings|ranking|rankings|fifa|afcon|caf|africa|cup|nations|qualifying|group|table|in|men|women|mens|womens|champions|league|bundesliga|premier|liga|serie|ligue|europa|top|teams)\b",
         " ",
         text,
         flags=re.IGNORECASE,
@@ -1408,7 +1481,7 @@ def _league_standing(item):
     return _standing_reply(table.get("entries") or [], label, title, league, name, item.get("id"))
 
 
-def _standing_reply(entries, group_name, season, league, country, team_key=None, afcon=False):
+def _standing_reply(entries, group_name, season, league, country, team_key=None, afcon=False, require_team=True):
     group_ids = {str((entry.get("team") or {}).get("id") or "") for entry in entries}
     rows = []
     asked = None
@@ -1441,7 +1514,7 @@ def _standing_reply(entries, group_name, season, league, country, team_key=None,
             "_id": team_id,
         }
         rows.append((order, row))
-        if (team_key and team_id == str(team_key)) or _names_in([country], {"home": label, "away": "", "comp": label}):
+        if country and ((team_key and team_id == str(team_key)) or _names_in([country], {"home": label, "away": "", "comp": label})):
             row["asked"] = True
             asked = row
     rows.sort(key=lambda item: item[0])
@@ -1455,15 +1528,19 @@ def _standing_reply(entries, group_name, season, league, country, team_key=None,
     else:
         for _, row in rows:
             row.pop("_id", None)
-    if not asked:
+    if not asked and require_team:
         return None
-    place = _ordinal(asked["rank"])
+    place = _ordinal(asked["rank"]) if asked else ""
     where = season if group_name.strip().lower() == season.strip().lower() else f"{group_name} of {season}"
     lines = [row for _, row in rows]
     source = "\n\nSource: [ESPN soccer](https://www.espn.com/soccer/), retrieved for this answer."
+    if asked:
+        sentence = f"{_hi(asked['team'])} is {_hi(place)} in {where}."
+    else:
+        sentence = f"Top {len(lines)} in {where}."
     return {
-        "text": f"{_hi(asked['team'])} is {_hi(place)} in {where}.{source}",
-        "focus": {"kind": "afcon-standing" if league == "caf.nations_qual" else "standing", "team": asked["team"]},
+        "text": f"{sentence}{source}",
+        "focus": {"kind": "afcon-standing" if league == "caf.nations_qual" else "standing", "team": asked["team"] if asked else ""},
         "card": {
             "kind": "standing",
             "title": "STANDINGS",
