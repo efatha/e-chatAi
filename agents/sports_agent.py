@@ -129,6 +129,8 @@ def sports_reply(message, focus=None, conversation=None):
         return _scorer_answer(text, focus)
     if re.search(r"\blive\b", text, re.IGNORECASE) and re.search(r"\bscore", text, re.IGNORECASE):
         return _livescore_answer(text)
+    if re.search(r"\byesterday\b", text, re.IGNORECASE) and re.search(r"\b(result|score|match|matches|game|games)\b", text, re.IGNORECASE):
+        return _yesterday_answer(text)
     board = _competition_board(text)
     if board:
         return board
@@ -865,7 +867,7 @@ def _live_names(text):
         parts = re.split(r"\s+\bvs\.?\b\s+|\s+\bversus\b\s+|\s+\band\b\s+", text, maxsplit=1, flags=re.IGNORECASE)
         names = [_subject(part) for part in parts]
         return [name for name in names if name and _plain(name) not in {"now", "current"}]
-    name = re.sub(r"\b(now|current|currently|afcon|caf|today)\b", " ", _subject(text), flags=re.IGNORECASE)
+    name = re.sub(r"\b(now|current|currently|afcon|caf|today|yesterday)\b", " ", _subject(text), flags=re.IGNORECASE)
     name = re.sub(r"\s+", " ", name).strip()
     if not name or _plain(name) in {"now", "current"}:
         return []
@@ -1041,6 +1043,36 @@ def _livescore_line(event):
 def _afcon_line(item):
     score = f" finished {item['score']}" if item.get("score") else " has no score on the page"
     return f"{item['title']}{score} on {item.get('when') or 'an unpublished date'}."
+
+
+def _yesterday_answer(text):
+    """Finished scores from yesterday in Africa/Kampala, for one team or the day's list."""
+    day = datetime.now(_KAMPALA).date() - timedelta(days=1)
+    stamp = day.strftime("%Y%m%d")
+    events = _livescore_events(
+        f"https://prod-public-api.livescore.com/v1/api/app/date/soccer/{stamp}/0?locale=en&MD=1"
+    )
+    names = _live_names(text)
+    source = "\n\nSource: [LiveScore](https://www.livescore.com/en/), retrieved for this answer."
+    if names:
+        matched = [event for event in events if _names_in(names, event)]
+        finished = [event for event in matched if (event.get("time") or "").upper() in {"FT", "AET", "PEN"}]
+        chosen = finished or matched
+        who = " and ".join(names)
+        if not chosen:
+            return {"text": f"LiveScore has no football match listed for {who} on {day.isoformat()} (Africa/Kampala). I won't invent a score.{source}"}
+        event = chosen[0]
+        focus = {"kind": "sport", "team": names[0], "home": event.get("home") or "", "away": event.get("away") or "", "eid": event.get("eid") or ""}
+        return {"text": f"{_livescore_line(event)} That was yesterday, {day.isoformat()} (Africa/Kampala).{source}", "focus": focus}
+    finished = [event for event in events if (event.get("time") or "").upper() in {"FT", "AET", "PEN"}]
+    africa = [event for event in finished if re.search(r"africa|caf", event.get("comp") or "", re.IGNORECASE)]
+    pool = africa or finished or events
+    shown = pool[:8]
+    if not shown:
+        return {"text": f"LiveScore has no football result listed for {day.isoformat()} (Africa/Kampala). I won't invent one.{source}"}
+    lines = _as_list([_livescore_line(event) for event in shown])
+    extra = f"\n{len(pool) - len(shown)} more finished matches are in the same list." if len(pool) > len(shown) else ""
+    return {"text": f"Football results for {day.isoformat()} (Africa/Kampala):\n" + "\n".join(lines) + extra + source}
 
 
 def _day_answer(text):
@@ -1356,7 +1388,7 @@ def _wiki(term, question):
 
 def _subject(text):
     cleaned = re.sub(
-        r"\b(what|when|who|which|is|are|was|were|the|next|last|latest|match|result|score|of|for|does|do|play|playing|played|against|vs|versus|today|tomorrow|live|fixture|fixtures|upcoming|club|team|time|his|her|happening|football|soccer|matches|they|starters|starting|start|starts|eleven|lineup|player|players|list|squad|roster|give|me|their)\b",
+        r"\b(what|when|who|which|is|are|was|were|the|next|last|latest|match|result|score|of|for|does|do|play|playing|played|against|vs|versus|today|tomorrow|yesterday|live|fixture|fixtures|upcoming|club|team|time|his|her|happening|football|soccer|matches|they|starters|starting|start|starts|eleven|lineup|player|players|list|squad|roster|give|me|their)\b",
         " ",
         text,
         flags=re.IGNORECASE,
