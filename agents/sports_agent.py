@@ -179,7 +179,9 @@ def _direct_fixture(text, focus):
     earlier = (focus or {}).get("matchup") or ""
     if re.search(r"\bvs\.?\b|\bversus\b", text, re.IGNORECASE):
         return _versus_answer(text)
-    if re.search(r"\b(score|last played|last play|last match)\b", text, re.IGNORECASE):
+    if re.search(r"\b(score|last played|last play|last match)\b", text, re.IGNORECASE) or (
+        re.search(r"\b(did|has)\b", text, re.IGNORECASE) and re.search(r"\b(win|won)\b", text, re.IGNORECASE)
+    ):
         if earlier and not _subject(text):
             return _versus_answer(earlier)
         if re.search(r"\band\b", text, re.IGNORECASE):
@@ -421,9 +423,11 @@ def _playing_answer(text, focus):
     when = "tomorrow" if re.search(r"\btomorrow\b", text, re.IGNORECASE) else ""
     if not when and re.search(r"\btoday\b", text, re.IGNORECASE):
         when = "today"
-    named = re.search(r"\b(?:is|are|does|do)\s+(.+?)\s+play(?:ing)?\b", text, re.IGNORECASE)
+    named = re.search(r"\b(?:is|are|does|do|will|did)\s+(.+?)\s+play(?:ing)?\b", text, re.IGNORECASE)
     if named and when:
-        team_name = named.group(1).strip(" ?.")
+        team_name = _subject(named.group(1)) or named.group(1).strip(" ?.")
+    elif named and re.search(r"\bwill\b", text, re.IGNORECASE):
+        return _when_answer(named.group(1))
     elif when and re.search(r"\b(?:the match|the game|match tomorrow|game tomorrow|match today|game today)\b", text, re.IGNORECASE):
         team_name = (focus or {}).get("team") or ""
         if not team_name:
@@ -1747,7 +1751,7 @@ def _wiki(term, question):
 
 def _subject(text):
     cleaned = re.sub(
-        r"\b(what|when|who|which|is|are|was|were|the|next|last|latest|match|result|score|of|for|does|do|play|playing|played|against|vs|versus|today|tomorrow|yesterday|live|fixture|fixtures|upcoming|club|team|time|his|her|happening|football|soccer|matches|they|starters|starting|start|starts|eleven|lineup|player|players|list|squad|roster|give|me|their)\b",
+        r"\b(what|when|who|which|is|are|was|were|will|did|the|next|last|latest|match|result|score|of|for|does|do|play|playing|played|win|won|against|vs|versus|today|tomorrow|yesterday|live|fixture|fixtures|upcoming|club|team|time|his|her|happening|football|soccer|matches|they|starters|starting|start|starts|eleven|lineup|player|players|list|squad|roster|give|me|their)\b",
         " ",
         text,
         flags=re.IGNORECASE,
