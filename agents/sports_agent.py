@@ -186,6 +186,9 @@ def _direct_fixture(text, focus):
             return _versus_answer(earlier)
         if re.search(r"\band\b", text, re.IGNORECASE):
             return _versus_answer(re.sub(r"\band\b", " vs ", text, count=1, flags=re.IGNORECASE))
+        dated = _score_on_day(text)
+        if dated:
+            return dated
         return _last_answer(text, focus)
     if re.search(r"\bwhen\b", text, re.IGNORECASE) and re.search(r"\bplay", text, re.IGNORECASE):
         return _when_answer(text)
@@ -201,6 +204,47 @@ def _when_answer(text):
     return {
         "text": f"{_event_line(event)}\n\n{_fixture_source(event)}",
         "focus": {"team": team["name"], "event": event.get("id") or "", "espn_league": event.get("espn_league") or ""},
+    }
+
+
+def _score_on_day(text):
+    """Final score for one team on today, yesterday, or the last time they played."""
+    if not re.search(r"\b(today|yesterday|last time)\b", text, re.IGNORECASE):
+        return None
+    name = _subject(text)
+    if not name:
+        return {"text": "Name the country or team. I won't invent a score."}
+    today = datetime.now(_KAMPALA).date()
+    if re.search(r"\btoday\b", text, re.IGNORECASE):
+        day, label = today, "today"
+    elif re.search(r"\byesterday\b", text, re.IGNORECASE):
+        day, label = today - timedelta(days=1), "yesterday"
+    else:
+        day, label = None, "last time"
+    source = "\n\nSource: [LiveScore](https://www.livescore.com/en/), retrieved for this answer."
+    if day is None:
+        events = _pick_team_fixture(_team_events([name]))
+        finished = [event for event in events if (event.get("time") or "").upper() in {"FT", "AET", "PEN"}]
+        event = (finished or [None])[0]
+        if not event:
+            return {"text": f"LiveScore has no completed match listed for {name}, so I won't invent a score.{source}"}
+        return {"text": f"{_livescore_line(event)} That was the final score the last time they played.{source}", "focus": {"team": name, "home": event.get("home") or "", "away": event.get("away") or "", "eid": event.get("eid") or ""}}
+    stamp = day.strftime("%Y%m%d")
+    events = [
+        event for event in _livescore_events(
+            f"https://prod-public-api.livescore.com/v1/api/app/date/soccer/{stamp}/0?locale=en&MD=1"
+        )
+        if _names_in([name], event)
+    ]
+    finished = [event for event in events if (event.get("time") or "").upper() in {"FT", "AET", "PEN"}]
+    if not finished:
+        if events:
+            return {"text": f"{_livescore_line(events[0])} That match is not finished, so there is no final score yet.{source}"}
+        return {"text": f"LiveScore has no completed match for {name} {label} ({day.isoformat()}, Africa/Kampala). I won't invent a score.{source}"}
+    event = finished[0]
+    return {
+        "text": f"{_livescore_line(event)} That was the final score {label}.{source}",
+        "focus": {"team": name, "home": event.get("home") or "", "away": event.get("away") or "", "eid": event.get("eid") or ""},
     }
 
 
@@ -1874,7 +1918,7 @@ def _wiki(term, question):
 
 def _subject(text):
     cleaned = re.sub(
-        r"\b(what|when|who|which|is|are|was|were|will|did|the|next|last|latest|match|result|score|of|for|does|do|play|playing|played|win|won|against|vs|versus|today|tomorrow|yesterday|live|fixture|fixtures|upcoming|club|team|time|his|her|happening|football|soccer|matches|they|starters|starting|start|starts|eleven|lineup|player|players|list|squad|roster|give|me|their)\b",
+        r"\b(what|when|who|which|is|are|was|were|will|did|the|next|last|latest|final|match|result|score|of|for|does|do|play|playing|played|win|won|against|vs|versus|today|tomorrow|yesterday|live|fixture|fixtures|upcoming|club|team|time|his|her|happening|football|soccer|matches|they|starters|starting|start|starts|eleven|lineup|player|players|list|squad|roster|give|me|their)\b",
         " ",
         text,
         flags=re.IGNORECASE,
