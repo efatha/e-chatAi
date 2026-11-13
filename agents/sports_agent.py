@@ -1485,8 +1485,103 @@ def _league_standing(item):
     return _standing_reply(table.get("entries") or [], label, title, league, name, item.get("id"))
 
 
+def _side_score(side):
+    score = side.get("score")
+    if isinstance(score, dict):
+        score = score.get("displayValue")
+        if score in (None, ""):
+            score = side.get("score", {}).get("value")
+    try:
+        return int(float(score))
+    except (TypeError, ValueError):
+        return None
+
+
+def _finished_table_matches(league, team_ids, fetch_ids):
+    """Finished matches between teams in this table, keyed by match id."""
+    found = {}
+    for team_id in fetch_ids:
+        try:
+            response = requests.get(
+                f"https://site.api.espn.com/apis/site/v2/sports/soccer/{league}/teams/{team_id}/schedule",
+                headers=_HEADERS,
+                timeout=12,
+            )
+            response.raise_for_status()
+            events = sorted(response.json().get("events") or [], key=lambda event: event.get("date") or "")
+        except (requests.RequestException, ValueError):
+            continue
+        for event in events:
+            competition = ((event.get("competitions") or [None])[0]) or {}
+            state = (((competition.get("status") or {}).get("type") or {}).get("state")) or ""
+            if state != "post":
+                continue
+            sides = competition.get("competitors") or []
+            parsed = []
+            for side in sides:
+                side_id = str((side.get("team") or {}).get("id") or "")
+                goals = _side_score(side)
+                if side_id and goals is not None:
+                    parsed.append((side_id, goals))
+            if len(parsed) < 2 or not {parsed[0][0], parsed[1][0]} <= team_ids:
+                continue
+            found[str(event.get("id") or len(found))] = (event.get("date") or "", parsed[0], parsed[1])
+    return [found[key] for key in sorted(found, key=lambda key: found[key][0])]
+
+
+def _add_result(record, scored, conceded):
+    record["mp"] += 1
+    record["gf"] += scored
+    record["ga"] += conceded
+    if scored > conceded:
+        record["w"] += 1
+        record["form"].append("W")
+    elif scored == conceded:
+        record["d"] += 1
+        record["form"].append("D")
+    else:
+        record["l"] += 1
+        record["form"].append("L")
+
+
+def _catch_up_records(entries, league):
+    """Use finished matches the standings table has not counted yet."""
+    ids = {str((entry.get("team") or {}).get("id") or "") for entry in entries}
+    ids.discard("")
+    if not ids:
+        return {}
+    fetch_ids = ids if len(ids) <= 8 else ids
+    if len(ids) > 8:
+        return {}
+    matches = _finished_table_matches(league, ids, fetch_ids)
+    if not matches:
+        return {}
+    listed = sum(int(_stat(entry, "gamesPlayed") or 0) for entry in entries) / 2
+    if len(matches) <= listed:
+        return {}
+    records = {team_id: {"mp": 0, "w": 0, "d": 0, "l": 0, "gf": 0, "ga": 0, "form": []} for team_id in ids}
+    for _date, left, right in matches:
+        _add_result(records[left[0]], left[1], right[1])
+        _add_result(records[right[0]], right[1], left[1])
+    return records
+
+
 def _standing_reply(entries, group_name, season, league, country, team_key=None, afcon=False, require_team=True):
     group_ids = {str((entry.get("team") or {}).get("id") or "") for entry in entries}
+    group_ids.discard("")
+    table_matches = _finished_table_matches(league, group_ids, group_ids) if len(group_ids) <= 8 else []
+    played_form = {team_id: [] for team_id in group_ids}
+    for _date, left, right in table_matches:
+        for side, other in ((left, right), (right, left)):
+            if side[0] not in played_form:
+                continue
+            if side[1] > other[1]:
+                played_form[side[0]].append("W")
+            elif side[1] == other[1]:
+                played_form[side[0]].append("D")
+            else:
+                played_form[side[0]].append("L")
+    fresh = _catch_up_records(entries, league)
     rows = []
     asked = None
     for entry in entries:
@@ -1494,17 +1589,28 @@ def _standing_reply(entries, group_name, season, league, country, team_key=None,
         label = team.get("displayName") or "Unknown"
         if _plain(label) == "congo dr":
             label = "DR Congo"
-        rank = _stat(entry, "rank")
-        try:
-            order = int(rank)
-        except ValueError:
-            order = 0
         team_id = str(team.get("id") or "")
-        row = {
-            "rank": rank,
-            "team": label,
-            "logo": ((team.get("logos") or [{}])[0].get("href")) or "",
-            "cells": [
+        record = fresh.get(team_id)
+        if record:
+            goal_diff = record["gf"] - record["ga"]
+            cells = [
+                str(record["mp"]),
+                str(record["w"]),
+                str(record["d"]),
+                str(record["l"]),
+                str(record["gf"]),
+                str(record["ga"]),
+                _signed(str(goal_diff)),
+                str(record["w"] * 3 + record["d"]),
+            ]
+            order = 0
+        else:
+            rank = _stat(entry, "rank")
+            try:
+                order = int(rank)
+            except ValueError:
+                order = 0
+            cells = [
                 _stat(entry, "gamesPlayed"),
                 _stat(entry, "wins"),
                 _stat(entry, "ties"),
@@ -1513,30 +1619,45 @@ def _standing_reply(entries, group_name, season, league, country, team_key=None,
                 _stat(entry, "pointsAgainst"),
                 _signed(_stat(entry, "pointDifferential")),
                 _stat(entry, "points"),
-            ],
-            "form": [],
+            ]
+        row = {
+            "rank": _stat(entry, "rank"),
+            "team": label,
+            "logo": ((team.get("logos") or [{}])[0].get("href")) or "",
+            "cells": cells,
+            "form": (played_form.get(team_id) or (record["form"] if record else []))[-5:],
             "_id": team_id,
+            "_fresh": bool(record),
         }
-        rows.append((order, row))
+        rows.append((order, int(cells[7] or 0), int(str(cells[6]).replace("+", "") or 0), int(cells[4] or 0), row))
         if country and ((team_key and team_id == str(team_key)) or _names_in([country], {"home": label, "away": "", "comp": label})):
             row["asked"] = True
             asked = row
-    rows.sort(key=lambda item: item[0])
-    if len(rows) <= 8:
-        for _, row in rows:
-            row["form"] = _recent_form(league, row.pop("_id"), group_ids, afcon)
-    elif asked:
-        asked["form"] = _recent_form(league, asked.pop("_id"), group_ids, afcon)
-        for _, row in rows:
-            row.pop("_id", None)
+    if fresh:
+        rows.sort(key=lambda item: (item[1], item[2], item[3]), reverse=True)
+        for index, item in enumerate(rows, start=1):
+            item[4]["rank"] = str(index)
     else:
-        for _, row in rows:
-            row.pop("_id", None)
+        rows.sort(key=lambda item: item[0])
+    if not fresh and len(rows) <= 8 and not table_matches:
+        for item in rows:
+            row = item[4]
+            row["form"] = _recent_form(league, row.pop("_id"), group_ids, afcon)
+            row.pop("_fresh", None)
+    elif not fresh and asked and not table_matches:
+        asked["form"] = _recent_form(league, asked.pop("_id"), group_ids, afcon)
+        for item in rows:
+            item[4].pop("_id", None)
+            item[4].pop("_fresh", None)
+    else:
+        for item in rows:
+            item[4].pop("_id", None)
+            item[4].pop("_fresh", None)
     if not asked and require_team:
         return None
     place = _ordinal(asked["rank"]) if asked else ""
     where = season if group_name.strip().lower() in season.strip().lower() else f"{group_name} of {season}"
-    lines = [row for _, row in rows]
+    lines = [item[4] for item in rows]
     source = "\n\nSource: [ESPN soccer](https://www.espn.com/soccer/), retrieved for this answer."
     if asked:
         sentence = f"{_hi(asked['team'])} is {_hi(place)} in {where}."
@@ -1591,7 +1712,7 @@ def _recent_form(league, team_id, group_ids=None, afcon=False):
             timeout=12,
         )
         response.raise_for_status()
-        events = response.json().get("events") or []
+        events = sorted(response.json().get("events") or [], key=lambda event: event.get("date") or "")
     except (requests.RequestException, ValueError):
         return []
     played = []
@@ -1616,7 +1737,7 @@ def _recent_form(league, team_id, group_ids=None, afcon=False):
             played.append("L")
         else:
             played.append("D")
-    return list(reversed(played[-5:]))
+    return played[-5:]
 
 
 def _stat(entry, key):
