@@ -786,18 +786,7 @@ def _livescore_answer(text):
     elif names:
         events = [event for event in events if _names_in(names, event)]
         if not events:
-            today = datetime.now(_KAMPALA).date()
-            upcoming = []
-            for offset in range(0, 4):
-                day = (today + timedelta(days=offset)).strftime("%Y%m%d")
-                upcoming.extend(
-                    event for event in _livescore_events(
-                        f"https://prod-public-api.livescore.com/v1/api/app/date/soccer/{day}/0?locale=en&MD=1"
-                    )
-                    if _names_in(names, event)
-                )
-            waiting = [event for event in upcoming if (event.get("time") or "").upper() == "NS"]
-            events = waiting[:1] or upcoming[:1]
+            events = _pick_team_fixture(_team_events(names))
     if not events:
         if re.search(r"\b(afcon|africa cup|african cup|\bcaf\b)\b", text, re.IGNORECASE):
             who = "AFCON"
@@ -810,6 +799,8 @@ def _livescore_answer(text):
             )
         }
     lines = [_livescore_line(event) for event in events[:12]]
+    if len(events) == 1 and (events[0].get("time") or "").upper() in {"FT", "AET", "PEN"}:
+        lines = [lines[0] + " The match is over, so that is the final score."]
     if len(lines) > 1:
         lines = [f"- {line}" for line in lines]
     result = {
@@ -827,12 +818,54 @@ def _livescore_answer(text):
     return result
 
 
-def _live_names(text):
+def _team_events(names):
+    """Recent and upcoming LiveScore rows for these sides, including yesterday's final."""
+    today = datetime.now(_KAMPALA).date()
+    found = []
+    seen = set()
+    for offset in range(-2, 4):
+        day = (today + timedelta(days=offset)).strftime("%Y%m%d")
+        for event in _livescore_events(
+            f"https://prod-public-api.livescore.com/v1/api/app/date/soccer/{day}/0?locale=en&MD=1"
+        ):
+            if not _names_in(names, event) or not event.get("eid") or event["eid"] in seen:
+                continue
+            seen.add(event["eid"])
+            found.append(event)
+    return found
+
+
+def _pick_team_fixture(events):
+    """Prefer a match in progress, then the latest final, then the next kickoff."""
+    if not events:
+        return []
+    def clock(event):
+        return (event.get("time") or "").upper()
+    playing = [event for event in events if clock(event) not in {"", "NS", "FT", "AET", "PEN", "ABD", "POST", "CANC"}]
+    if playing:
+        return playing[:1]
+    finished = [event for event in events if clock(event) in {"FT", "AET", "PEN"}]
+    if finished:
+        return [max(finished, key=lambda event: event.get("kickoff") or "")]
+    waiting = [event for event in events if clock(event) == "NS"]
+    return waiting[:1] or events[:1]
     if re.search(r"\bvs\.?\b|\bversus\b|\band\b", text, re.IGNORECASE):
         parts = re.split(r"\s+\bvs\.?\b\s+|\s+\bversus\b\s+|\s+\band\b\s+", text, maxsplit=1, flags=re.IGNORECASE)
         names = [_subject(part) for part in parts]
         return [name for name in names if name and _plain(name) not in {"now", "current"}]
     name = re.sub(r"\b(now|current|currently|afcon|caf)\b", " ", _subject(text), flags=re.IGNORECASE)
+    name = re.sub(r"\s+", " ", name).strip()
+    if not name or _plain(name) in {"now", "current"}:
+        return []
+    return [name]
+
+
+def _live_names(text):
+    if re.search(r"\bvs\.?\b|\bversus\b|\band\b", text, re.IGNORECASE):
+        parts = re.split(r"\s+\bvs\.?\b\s+|\s+\bversus\b\s+|\s+\band\b\s+", text, maxsplit=1, flags=re.IGNORECASE)
+        names = [_subject(part) for part in parts]
+        return [name for name in names if name and _plain(name) not in {"now", "current"}]
+    name = re.sub(r"\b(now|current|currently|afcon|caf|today)\b", " ", _subject(text), flags=re.IGNORECASE)
     name = re.sub(r"\s+", " ", name).strip()
     if not name or _plain(name) in {"now", "current"}:
         return []
@@ -912,17 +945,8 @@ def _scorer_answer(text, focus):
         if names:
             events = [event for event in events if _names_in(names, event)]
     if not events and names:
-        today = datetime.now(_KAMPALA).date()
-        for offset in range(0, 2):
-            day = (today + timedelta(days=offset)).strftime("%Y%m%d")
-            events.extend(
-                event for event in _livescore_events(
-                    f"https://prod-public-api.livescore.com/v1/api/app/date/soccer/{day}/0?locale=en&MD=1"
-                )
-                if _names_in(names, event)
-            )
-    started = [event for event in events if (event.get("time") or "").upper() != "NS" and event.get("eid")]
-    event = saved or ((started or events or [None])[0])
+        events = _pick_team_fixture(_team_events(names))
+    event = saved or ((events or [None])[0])
     source = "\n\nSource: [LiveScore](https://www.livescore.com/en/), retrieved for this answer."
     if not event or not event.get("eid"):
         who = " and ".join(names) if names else "that match"
