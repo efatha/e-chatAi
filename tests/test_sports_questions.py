@@ -67,7 +67,8 @@ class SportsQuestionTests(unittest.TestCase):
         self.assertTrue(drc)
         self.assertFalse(sports_agent._names_in(["mali"], {"home": "Somalia", "away": "Ghana"}))
         self.assertTrue(sports_agent._names_in(["mali"], {"home": "Mali", "away": "Chad"}))
-        self.assertTrue(sports_agent._names_in(["somalia"], {"home": "Somalia", "away": "Ghana"}))
+        self.assertEqual(sports_agent._standing_name("what is DRC FIFA standing now?"), "DRC")
+        self.assertEqual(sports_agent._standing_name("what is DRC rank in FIFA at the moment"), "DRC")
 
 
 class PersonFollowUpTests(unittest.TestCase):

@@ -160,12 +160,14 @@ def sports_reply(message, focus=None, conversation=None):
     if history:
         return history
     if re.search(r"\b(standing|standings|ranking|rankings)\b", text, re.IGNORECASE) or (
+        re.search(r"\brank\b", text, re.IGNORECASE) and re.search(r"\bfifa\b", text, re.IGNORECASE)
+    ) or (
         re.search(r"\btop\s+\d+\b|\b\d+\s+top\b|\btop teams\b", text, re.IGNORECASE) and _named_league(text)
     ):
         table = _standing_answer(text)
         if table:
             return table
-    if re.search(r"\bfifa\b", text, re.IGNORECASE) and re.search(r"\b(ranking|rankings|standings|top\s+\d+)\b", text, re.IGNORECASE):
+    if re.search(r"\bfifa\b", text, re.IGNORECASE) and re.search(r"\b(rank|ranking|rankings|standings|top\s+\d+)\b", text, re.IGNORECASE):
         return _fifa_rankings(text)
     if re.search(r"\b(news|dismissed|broke records)\b", text, re.IGNORECASE):
         return {"text": "I don't have a dated news report for that, so I won't turn a rumour into a confirmed story."}
@@ -224,6 +226,8 @@ def _parse_question(text):
         day, label = None, ""
     competition = _named_league(text)
     standing = bool(re.search(r"\b(standing|standings|ranking|rankings)\b", text or "", re.IGNORECASE) or (
+        re.search(r"\brank\b", text or "", re.IGNORECASE) and re.search(r"\bfifa\b", text or "", re.IGNORECASE)
+    ) or (
         re.search(r"\btop\s+\d+\b|\b\d+\s+top\b|\btop teams\b", text or "", re.IGNORECASE) and competition
     ))
     score = bool(label) and bool(
@@ -1462,7 +1466,7 @@ def _slug_standing(slug, label, country, limit):
 
 def _standing_name(text):
     cleaned = re.sub(
-        r"\b(standing|standings|ranking|rankings|fifa|afcon|caf|africa|cup|nations|qualifying|group|table|in|men|women|mens|womens|champions|league|bundesliga|premier|liga|serie|ligue|europa|top|teams)\b",
+        r"\b(standing|standings|ranking|rankings|rank|fifa|afcon|caf|africa|cup|nations|qualifying|group|table|in|at|men|women|mens|womens|champions|league|bundesliga|premier|liga|serie|ligue|europa|top|teams|now|today|tonight|currently|current|moment)\b",
         " ",
         text,
         flags=re.IGNORECASE,
@@ -1897,8 +1901,8 @@ def _fifa_rankings(text):
     gender = 2 if re.search(r"\bwomen\b", text, re.IGNORECASE) else 1
     try:
         response = requests.get(
-            "https://api.fifa.com/api/v3/rankings",
-            params={"language": "en", "count": count, "gender": gender},
+            "https://api.fifa.com/api/v3/fifarankings/rankings/live",
+            params={"language": "en", "count": 200, "gender": gender, "sportType": 0},
             headers={**_HEADERS, "Accept": "application/json"},
             timeout=12,
         )
@@ -1908,8 +1912,14 @@ def _fifa_rankings(text):
         return {"text": "I couldn't read the FIFA rankings just now, so I won't invent the top countries."}
     if not rows:
         return {"text": "The FIFA rankings API returned no teams, so I won't invent the list."}
-    published = str(rows[0].get("PubDate") or "")[:10]
+    published = _fifa_published(gender)
     side = "women's" if gender == 2 else "men's"
+    page = (
+        "https://inside.fifa.com/fifa-rankings/world-ranking/women"
+        if gender == 2
+        else "https://inside.fifa.com/fifa-rankings/world-ranking/men"
+    )
+    source = f"\n\nSource: [FIFA world ranking]({page}), retrieved for this answer."
     if country:
         row = _ranking_row(rows, country)
         if not row:
@@ -1917,8 +1927,9 @@ def _fifa_rankings(text):
         name, points = _ranking_name(row)
         return {
             "text": (
-                f"{name} is {row.get('Rank')} in the {side} world ranking published by FIFA on {published}, with {points} points.\n\n"
-                "Source: [FIFA world ranking](https://www.fifa.com/fifa-world-ranking/men), retrieved for this answer."
+                f"{name} is {row.get('Rank')} in the current {side} world ranking"
+                + (f" dated {published}" if published else "")
+                + f", with {points} points.{source}"
             ),
             "focus": {"kind": "ranking", "team": name},
         }
@@ -1928,10 +1939,11 @@ def _fifa_rankings(text):
         lines.append(f"{row.get('Rank')}. {name} — {points} points")
     return {
         "text": (
-            f"Latest {side} world ranking published by FIFA on {published}. "
-            "This is the newest list that API returned.\n"
+            f"Current {side} world ranking"
+            + (f" dated {published}" if published else "")
+            + ". This is the list on the official FIFA ranking page.\n"
             + "\n".join(lines)
-            + "\n\nSource: [FIFA world ranking](https://www.fifa.com/fifa-world-ranking/men), retrieved for this answer."
+            + source
         ),
         "focus": {"kind": "ranking"},
     }
@@ -1940,8 +1952,35 @@ def _fifa_rankings(text):
 def _ranking_name(row):
     names = row.get("TeamName") or []
     name = next((item.get("Description") for item in names if item.get("Description")), "Unknown")
-    points = row.get("DecimalTotalPoints") or row.get("TotalPoints") or ""
+    points = row.get("TotalPoints") or row.get("DecimalTotalPoints") or ""
+    try:
+        points = f"{float(points):.2f}"
+    except (TypeError, ValueError):
+        points = str(points)
     return name, points
+
+
+def _fifa_published(gender):
+    """The date of the current list on the official FIFA ranking page."""
+    page = (
+        "https://inside.fifa.com/fifa-rankings/world-ranking/women"
+        if gender == 2
+        else "https://inside.fifa.com/fifa-rankings/world-ranking/men"
+    )
+
+    def load():
+        try:
+            response = requests.get(page, headers=_HEADERS, timeout=12)
+            response.raise_for_status()
+            match = re.search(
+                r'"year":"20\d\d","dates":\[\{"id":"[^"]+","iso":"[^"]+","dateText":"[^"]+","matchWindowEndDate":"(\d{4}-\d{2}-\d{2})"',
+                response.text,
+            )
+            return match.group(1) if match else ""
+        except (requests.RequestException, ValueError):
+            return ""
+
+    return _cached(("fifa-page-date", gender), load) or ""
 
 
 def _ranking_row(rows, country):
