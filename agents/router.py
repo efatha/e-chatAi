@@ -83,7 +83,7 @@ def _reuse_subject(text, focus, conversation=None):
     }:
         when = "tomorrow" if "tomorrow" in lowered else "tonight"
         return f"what is the weather {when} in {place}"
-    if ((focus or {}).get("kind") == "creator" or _about_creator(conversation)) and re.search(r"\b(he|him|his)\b", lowered) and "efatha" not in lowered:
+    if _about_creator(conversation) and re.search(r"\b(he|him|his)\b", lowered) and "efatha" not in lowered:
         if re.fullmatch(r"(?:who is|tell me about|about|and)?\s*(?:he|him)", lowered):
             return "who is Efatha"
         rewritten = re.sub(r"\bhis\b", "Efatha's", lowered)
@@ -110,7 +110,8 @@ def _about_creator(conversation):
         content = str((item.get("content") if isinstance(item, dict) else "") or "").lower()
         if not content:
             continue
-        return "efatha" in content
+        body = re.sub(r"^[a-z .'-]{1,40},\s+", "", content)
+        return "efatha" in body
     return False
 
 
