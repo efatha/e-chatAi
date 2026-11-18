@@ -207,7 +207,10 @@ const renderCommons = (photo) => {
   const figure = document.createElement("figure");
   figure.className = "commons-photo";
   const image = document.createElement("img");
-  image.src = photo.thumbnail;
+  image.src = photo.thumbnail && photo.thumbnail.startsWith("https://")
+    ? `/chat-image?src=${encodeURIComponent(photo.thumbnail)}`
+    : (photo.thumbnail || "");
+  image.addEventListener("error", () => figure.remove());
   image.alt = photo.title || "Wikimedia Commons image";
   figure.appendChild(image);
   const caption = document.createElement("figcaption");

@@ -1,4 +1,7 @@
-from flask import Flask, render_template, request, jsonify
+from urllib.parse import urlparse
+
+from flask import Flask, Response, render_template, request, jsonify
+import requests
 import os
 import re
 import secrets
@@ -142,6 +145,43 @@ def _chat_turn():
 
 
 # Both routes use the same local-only brain.
+_IMAGE_HOSTS = (
+    ".mm.bing.net",
+    ".gstatic.com",
+    ".googleusercontent.com",
+    ".wikimedia.org",
+    ".content.ces.ncsu.edu",
+)
+
+
+@app.route("/chat-image")
+def chat_image():
+    """Load a picture through this site so the browser is allowed to show it."""
+    raw = request.args.get("src") or ""
+    parsed = urlparse(raw)
+    host = (parsed.hostname or "").lower()
+    allowed = parsed.scheme == "https" and any(
+        host == name[1:] or host.endswith(name) for name in _IMAGE_HOSTS
+    )
+    if not allowed:
+        return "", 404
+    try:
+        upstream = requests.get(
+            raw,
+            headers={
+                "User-Agent": "Mozilla/5.0",
+                "Referer": "https://www.google.com/" if "google" in host or "gstatic" in host else "https://www.bing.com/",
+            },
+            timeout=12,
+        )
+    except requests.RequestException:
+        return "", 404
+    kind = upstream.headers.get("content-type") or ""
+    if not upstream.ok or not kind.startswith("image/"):
+        return "", 404
+    return Response(upstream.content, mimetype=kind.split(";")[0])
+
+
 @app.route("/weather")
 def weather_now():
     from agents.knowledge_agent import weather_reply

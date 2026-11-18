@@ -1919,7 +1919,7 @@ def google_images(phrase, limit=3):
             continue
         found.append({
             "thumbnail": thumb,
-            "page": item.get("url") or thumb,
+            "page": page,
             "title": phrase,
             "creator": "illustrative image",
             "license": "e-chat",
