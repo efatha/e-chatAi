@@ -916,5 +916,24 @@ document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") closeImageZoom();
 });
 
+const fitMobileKeyboard = () => {
+  const view = window.visualViewport;
+  if (!view || window.innerWidth > 678) {
+    document.documentElement.style.removeProperty("--kb");
+    return;
+  }
+  const covered = Math.max(0, window.innerHeight - view.height - view.offsetTop);
+  document.documentElement.style.setProperty("--kb", `${Math.round(covered)}px`);
+};
+if (window.visualViewport) {
+  window.visualViewport.addEventListener("resize", fitMobileKeyboard);
+  window.visualViewport.addEventListener("scroll", fitMobileKeyboard);
+}
+window.addEventListener("resize", fitMobileKeyboard);
+msgInput?.addEventListener("focus", fitMobileKeyboard);
+msgInput?.addEventListener("blur", () => {
+  document.documentElement.style.removeProperty("--kb");
+});
+
 // Tooltip & Emoji Systems remain as defined in your previous version...
 // (Skipped for brevity but should be kept in your actual deployment)

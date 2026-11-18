@@ -1375,11 +1375,25 @@ form.is-recording #message-input {
 
 /* Responsive design */
 @media (max-width:678px) {
- .app-shell{
-   width: 100%;
-   margin-top: 85px;
-   padding: 0 10px;
+ body{
    flex-direction: column;
+   align-items: stretch;
+   height: 100svh;
+   min-height: 0;
+   overflow: hidden;
+ }
+ .pre-header{
+   position: relative;
+   flex: 0 0 auto;
+   width: 100%;
+ }
+ .app-shell{
+   flex: 1;
+   width: 100%;
+   margin-top: 0;
+   padding: 0;
+   flex-direction: column;
+   min-height: 0;
  }
  .memory-sidebar{
    width: 100%;
@@ -1393,12 +1407,47 @@ form.is-recording #message-input {
    min-width: 220px;
  }
  article{
-  padding: 0px;
-  margin-bottom: 150px;
+  flex: 1;
+  padding: 0;
+  margin-bottom: 0;
+  width: 100%;
+  min-height: 0;
  }
  .chatbot-popup{
-  max-width:360px;
-  margin-top: 100px auto;
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  margin: 0;
+  border-radius: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+ }
+ .chat-body{
+  flex: 1;
+  height: auto;
+  min-height: 0;
+  margin-bottom: 0;
+  padding-bottom: 78px;
+ }
+ .chat-welcome{
+  max-width: none;
+  width: 100%;
+  padding: 24px 16px 36px;
+ }
+ .chat-welcome h1{
+  font-size: 1.35rem;
+ }
+ .echat-footer{
+  position: fixed;
+  left: 10px;
+  right: 10px;
+  width: auto;
+  z-index: 20;
+  bottom: calc(8px + var(--kb, 0px) + env(safe-area-inset-bottom));
+ }
+ form #message-input{
+  font-size: 16px;
  }
 }
 
