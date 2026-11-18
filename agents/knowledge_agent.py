@@ -1907,6 +1907,11 @@ def _picture_phrase(phrase):
     return cleaned.strip(" ?.!")
 
 
+def pexels_search_url(phrase):
+    """https://www.pexels.com/search/smart%20boy/"""
+    return "https://www.pexels.com/search/" + requests.utils.quote(_picture_phrase(phrase)) + "/"
+
+
 def _pexels_thumbs(phrase, limit):
     """Pictures from a Pexels search, sized for the chat."""
     phrase = _picture_phrase(phrase)
@@ -1921,8 +1926,7 @@ def _pexels_thumbs(phrase, limit):
     }
     try:
         page = requests.get(
-            "https://www.pexels.com/search/",
-            params={"q": phrase},
+            pexels_search_url(phrase),
             headers=headers,
             timeout=12,
         )
@@ -2007,9 +2011,10 @@ def google_images(phrase, limit=3):
     except (requests.RequestException, ValueError):
         results = []
     found = []
+    search = pexels_search_url(phrase)
     for thumb in _pexels_thumbs(phrase, limit):
-        found.append(_image_card(phrase, thumb, page))
-    if len(found) >= limit:
+        found.append(_image_card(phrase, thumb, search))
+    if len(found) >= 2:
         return found[:limit]
     for item in results:
         thumb = item.get("thumbnail") or ""
