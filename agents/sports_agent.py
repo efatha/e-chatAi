@@ -3,7 +3,9 @@
 import os
 import random
 import re
+import time
 import unicodedata
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -12,6 +14,8 @@ import requests
 _API = "https://www.thesportsdb.com/api/v1/json/123"
 _HEADERS = {"User-Agent": "Mozilla/5.0"}
 _KAMPALA = ZoneInfo("Africa/Kampala")
+_CACHE_TTL = 180
+_FEED_CACHE = {}
 _SPORT_SITE = (
     ("premier league", "Premier League", "https://www.premierleague.com/"),
     ("la liga", "La Liga", "https://www.laliga.com/"),
@@ -207,20 +211,50 @@ def _when_answer(text):
     }
 
 
+def _parse_question(text):
+    """Read a sports question once: intent, team, competition, and day."""
+    today = datetime.now(_KAMPALA).date()
+    if re.search(r"\blast time\b", text or "", re.IGNORECASE):
+        day, label = None, "last time"
+    elif re.search(r"\byesterday\b", text or "", re.IGNORECASE):
+        day, label = today - timedelta(days=1), "yesterday"
+    elif re.search(r"\btoday\b", text or "", re.IGNORECASE):
+        day, label = today, "today"
+    else:
+        day, label = None, ""
+    competition = _named_league(text)
+    standing = bool(re.search(r"\b(standing|standings|ranking|rankings)\b", text or "", re.IGNORECASE) or (
+        re.search(r"\btop\s+\d+\b|\b\d+\s+top\b|\btop teams\b", text or "", re.IGNORECASE) and competition
+    ))
+    score = bool(label) and bool(
+        re.search(r"\b(score|result|results)\b", text or "", re.IGNORECASE)
+        or (re.search(r"\b(did|has)\b", text or "", re.IGNORECASE) and re.search(r"\b(win|won)\b", text or "", re.IGNORECASE))
+    )
+    if standing:
+        intent = "standing"
+        team = _standing_name(text)
+    else:
+        intent = "score" if score else ""
+        team = _subject(text)
+    return {
+        "intent": intent,
+        "team": team,
+        "competition": competition,
+        "day": day,
+        "label": label,
+        "limit": _top_count(text) if standing else None,
+    }
+
+
 def _score_on_day(text):
     """Final score for one team on today, yesterday, or the last time they played."""
-    if not re.search(r"\b(today|yesterday|last time)\b", text, re.IGNORECASE):
+    parsed = _parse_question(text)
+    if parsed["intent"] != "score":
         return None
-    name = _subject(text)
+    name = parsed["team"]
+    day, label = parsed["day"], parsed["label"]
     if not name:
         return {"text": "Name the country or team. I won't invent a score."}
-    today = datetime.now(_KAMPALA).date()
-    if re.search(r"\btoday\b", text, re.IGNORECASE):
-        day, label = today, "today"
-    elif re.search(r"\byesterday\b", text, re.IGNORECASE):
-        day, label = today - timedelta(days=1), "yesterday"
-    else:
-        day, label = None, "last time"
     source = "\n\nSource: [LiveScore](https://www.livescore.com/en/), retrieved for this answer."
     if day is None:
         events = _pick_team_fixture(_team_events([name]))
@@ -956,7 +990,7 @@ def _names_in(names, event):
             forms.add("congo dr")
         if asked == "congo" and ("dr" in words or "democratic" in words):
             return False
-        if not any(form and (form in title or set(form.split()) <= words) for form in forms):
+        if not any(form and set(form.split()) <= words for form in forms):
             return False
     return True
 
@@ -1356,16 +1390,17 @@ def _named_league(text):
 
 def _standing_answer(text):
     """A competition table for a standing, or the FIFA place when the question is a ranking."""
+    parsed = _parse_question(text)
     afcon = re.search(r"\b(afcon|caf|africa cup)\b", text, re.IGNORECASE)
-    country = _standing_name(text)
+    country = parsed["team"]
     ranking = re.search(r"\bfifa\b|\branking\b", text, re.IGNORECASE)
     if ranking and not afcon:
         return _fifa_rankings(f"ranking of {country}" if country else text)
-    league = _named_league(text)
+    league = parsed["competition"]
     if league and not (afcon and league[0] != "caf.nations_qual"):
         slug, label = league
         if slug != "caf.nations_qual" or afcon:
-            limit = _top_count(text)
+            limit = parsed["limit"]
             return _slug_standing(slug, label, country, limit)
     if country or afcon:
         return _competition_standing(country, afcon=bool(afcon))
@@ -1381,17 +1416,22 @@ def _top_count(text):
     return None
 
 
+def _standings_groups(slug):
+    """One competition table, reused for a few minutes by every team in it."""
+    def load():
+        try:
+            payload = _get_json(f"https://site.api.espn.com/apis/v2/sports/soccer/{slug}/standings")
+        except (requests.RequestException, ValueError):
+            return None
+        return payload.get("children") or []
+
+    return _cached(("standings", slug), load)
+
+
 def _slug_standing(slug, label, country, limit):
     """The named league's table, on the same board as a country group."""
-    try:
-        response = requests.get(
-            f"https://site.api.espn.com/apis/v2/sports/soccer/{slug}/standings",
-            headers=_HEADERS,
-            timeout=12,
-        )
-        response.raise_for_status()
-        groups = response.json().get("children") or []
-    except (requests.RequestException, ValueError):
+    groups = _standings_groups(slug)
+    if groups is None:
         return {"text": f"I couldn't read the {label} table just now, so I won't invent a place."}
     source = "\n\nSource: [ESPN soccer](https://www.espn.com/soccer/), retrieved for this answer."
     item = _espn_pick(country) if country else None
@@ -1405,17 +1445,6 @@ def _slug_standing(slug, label, country, limit):
     table = group.get("standings") or {}
     season = table.get("seasonDisplayName") or label
     entries = list(table.get("entries") or [])
-    if limit:
-        entries = sorted(entries, key=lambda entry: int(_stat(entry, "rank") or 0))[:limit]
-        if item:
-            wanted = str(item.get("id"))
-            if not any(str((entry.get("team") or {}).get("id")) == wanted for entry in entries):
-                extra = next(
-                    (entry for entry in (table.get("entries") or []) if str((entry.get("team") or {}).get("id")) == wanted),
-                    None,
-                )
-                if extra:
-                    entries.append(extra)
     group_name = group.get("name") or label
     if group_name.lower() in {"overall", season.lower(), "league phase"}:
         group_name = label
@@ -1427,6 +1456,7 @@ def _slug_standing(slug, label, country, limit):
         country,
         (item or {}).get("id"),
         require_team=bool(country),
+        limit=limit,
     )
 
 
@@ -1463,16 +1493,8 @@ def _in_afcon(country):
 
 
 def _afcon_groups():
-    try:
-        response = requests.get(
-            "https://site.api.espn.com/apis/v2/sports/soccer/caf.nations_qual/standings",
-            headers=_HEADERS,
-            timeout=12,
-        )
-        response.raise_for_status()
-        return response.json().get("children") or []
-    except (requests.RequestException, ValueError):
-        return []
+    groups = _standings_groups("caf.nations_qual")
+    return groups or []
 
 
 def _find_group(groups, country, team_id=None):
@@ -1509,15 +1531,8 @@ def _afcon_standing(country):
 
 def _league_standing(item):
     league = item.get("league") or ""
-    try:
-        response = requests.get(
-            f"https://site.api.espn.com/apis/v2/sports/soccer/{league}/standings",
-            headers=_HEADERS,
-            timeout=12,
-        )
-        response.raise_for_status()
-        groups = response.json().get("children") or []
-    except (requests.RequestException, ValueError):
+    groups = _standings_groups(league)
+    if not groups:
         return None
     name = item.get("displayName") or ""
     group = _find_group(groups, name, item.get("id"))
@@ -1543,36 +1558,106 @@ def _side_score(side):
         return None
 
 
+def _cached(key, loader):
+    """Keep one fetched table or match list for a few minutes."""
+    now = time.monotonic()
+    hit = _FEED_CACHE.get(key)
+    if hit and now - hit[0] < _CACHE_TTL:
+        return hit[1]
+    value = loader()
+    if value is not None:
+        _FEED_CACHE[key] = (now, value)
+    return value
+
+
+def _get_json(url):
+    response = requests.get(url, headers=_HEADERS, timeout=12)
+    response.raise_for_status()
+    return response.json()
+
+
+def _read_table_event(event, team_ids):
+    competition = ((event.get("competitions") or [None])[0]) or {}
+    state = (((competition.get("status") or {}).get("type") or {}).get("state")) or ""
+    if state != "post":
+        return None
+    parsed = []
+    for side in competition.get("competitors") or []:
+        side_id = str((side.get("team") or {}).get("id") or "")
+        goals = _side_score(side)
+        if side_id and goals is not None:
+            parsed.append((side_id, goals))
+    if len(parsed) < 2 or not {parsed[0][0], parsed[1][0]} <= team_ids:
+        return None
+    return (event.get("date") or "", parsed[0], parsed[1])
+
+
+def _schedule_events(league, team_id):
+    try:
+        payload = _get_json(
+            f"https://site.api.espn.com/apis/site/v2/sports/soccer/{league}/teams/{team_id}/schedule"
+        )
+    except (requests.RequestException, ValueError):
+        return []
+    return payload.get("events") or []
+
+
 def _finished_table_matches(league, team_ids, fetch_ids):
     """Finished matches between teams in this table, keyed by match id."""
-    found = {}
-    for team_id in fetch_ids:
-        try:
-            response = requests.get(
-                f"https://site.api.espn.com/apis/site/v2/sports/soccer/{league}/teams/{team_id}/schedule",
-                headers=_HEADERS,
-                timeout=12,
-            )
-            response.raise_for_status()
-            events = sorted(response.json().get("events") or [], key=lambda event: event.get("date") or "")
-        except (requests.RequestException, ValueError):
-            continue
-        for event in events:
-            competition = ((event.get("competitions") or [None])[0]) or {}
-            state = (((competition.get("status") or {}).get("type") or {}).get("state")) or ""
-            if state != "post":
-                continue
-            sides = competition.get("competitors") or []
-            parsed = []
-            for side in sides:
-                side_id = str((side.get("team") or {}).get("id") or "")
-                goals = _side_score(side)
-                if side_id and goals is not None:
-                    parsed.append((side_id, goals))
-            if len(parsed) < 2 or not {parsed[0][0], parsed[1][0]} <= team_ids:
-                continue
-            found[str(event.get("id") or len(found))] = (event.get("date") or "", parsed[0], parsed[1])
-    return [found[key] for key in sorted(found, key=lambda key: found[key][0])]
+    key = ("schedules", league, tuple(sorted(team_ids)), tuple(sorted(fetch_ids)))
+
+    def load():
+        found = {}
+        ids = [team_id for team_id in fetch_ids if team_id]
+        with ThreadPoolExecutor(max_workers=min(8, max(len(ids), 1))) as pool:
+            schedules = pool.map(lambda team_id: _schedule_events(league, team_id), ids)
+        for events in schedules:
+            for event in sorted(events, key=lambda item: item.get("date") or ""):
+                read = _read_table_event(event, team_ids)
+                if read:
+                    found[str(event.get("id") or len(found))] = read
+        return [found[item] for item in sorted(found, key=lambda item: found[item][0])]
+
+    return _cached(key, load)
+
+
+def _competition_table_matches(league, team_ids):
+    """Finished matches for a large table, from that competition's scoreboards."""
+    key = ("competition", league, tuple(sorted(team_ids)))
+
+    def load():
+        anchors = list(team_ids)[:4]
+        dates = set()
+        with ThreadPoolExecutor(max_workers=min(4, max(len(anchors), 1))) as pool:
+            schedules = pool.map(lambda team_id: _schedule_events(league, team_id), anchors)
+        for events in schedules:
+            for event in events:
+                competition = ((event.get("competitions") or [None])[0]) or {}
+                state = (((competition.get("status") or {}).get("type") or {}).get("state")) or ""
+                if state == "post" and len(str(event.get("date") or "")) >= 10:
+                    dates.add(str(event.get("date"))[:10].replace("-", ""))
+        found = {}
+        urls = [
+            f"https://site.api.espn.com/apis/site/v2/sports/soccer/{league}/scoreboard?dates={stamp}"
+            for stamp in sorted(dates)
+        ]
+        with ThreadPoolExecutor(max_workers=min(8, max(len(urls), 1))) as pool:
+            boards = pool.map(_safe_json, urls)
+        for payload in boards:
+            for event in (payload or {}).get("events") or []:
+                read = _read_table_event(event, team_ids)
+                if read:
+                    found[str(event.get("id") or len(found))] = read
+        return [found[item] for item in sorted(found, key=lambda item: found[item][0])]
+
+    return _cached(key, load)
+
+
+def _safe_json(url):
+    try:
+        return _get_json(url)
+    except (requests.RequestException, ValueError):
+        return {}
 
 
 def _add_result(record, scored, conceded):
@@ -1596,10 +1681,10 @@ def _catch_up_records(entries, league):
     ids.discard("")
     if not ids:
         return {}
-    fetch_ids = ids if len(ids) <= 8 else ids
     if len(ids) > 8:
-        return {}
-    matches = _finished_table_matches(league, ids, fetch_ids)
+        matches = _competition_table_matches(league, ids)
+    else:
+        matches = _finished_table_matches(league, ids, ids)
     if not matches:
         return {}
     listed = sum(int(_stat(entry, "gamesPlayed") or 0) for entry in entries) / 2
@@ -1612,10 +1697,14 @@ def _catch_up_records(entries, league):
     return records
 
 
-def _standing_reply(entries, group_name, season, league, country, team_key=None, afcon=False, require_team=True):
+def _standing_reply(entries, group_name, season, league, country, team_key=None, afcon=False, require_team=True, limit=None):
     group_ids = {str((entry.get("team") or {}).get("id") or "") for entry in entries}
     group_ids.discard("")
-    table_matches = _finished_table_matches(league, group_ids, group_ids) if len(group_ids) <= 8 else []
+    table_matches = (
+        _finished_table_matches(league, group_ids, group_ids)
+        if len(group_ids) <= 8
+        else _competition_table_matches(league, group_ids)
+    )
     played_form = {team_id: [] for team_id in group_ids}
     for _date, left, right in table_matches:
         for side, other in ((left, right), (right, left)):
@@ -1704,6 +1793,11 @@ def _standing_reply(entries, group_name, season, league, country, team_key=None,
     place = _ordinal(asked["rank"]) if asked else ""
     where = season if group_name.strip().lower() in season.strip().lower() else f"{group_name} of {season}"
     lines = [item[4] for item in rows]
+    if limit:
+        shown = lines[:limit]
+        if asked and asked not in shown:
+            shown.append(asked)
+        lines = shown
     source = "\n\nSource: [ESPN soccer](https://www.espn.com/soccer/), retrieved for this answer."
     if asked:
         sentence = f"{_hi(asked['team'])} is {_hi(place)} in {where}."
