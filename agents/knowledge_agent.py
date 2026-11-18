@@ -1940,9 +1940,10 @@ def composed_words(question):
     if not pair:
         return None
     modifier, noun = pair
-    fixed = _suggested_word(modifier)
-    if fixed and _one_edit(modifier, fixed):
-        modifier = fixed.lower()
+    if not wiktionary_entry(modifier):
+        fixed = _suggested_word(modifier)
+        if fixed and _one_edit(modifier, fixed):
+            modifier = fixed.lower()
     return modifier, noun
 
 
@@ -1962,17 +1963,43 @@ def _word_stem(word):
     return lowered
 
 
+def _describing_senses(word):
+    """Adjective or participle senses. A bare 'to …' verb is not used to modify a noun."""
+    try:
+        response = requests.get(
+            "https://en.wiktionary.org/api/rest_v1/page/definition/" + requests.utils.quote(word),
+            headers={"User-Agent": WIKI_USER_AGENT},
+            timeout=8,
+        )
+        if not response.ok:
+            return []
+        blocks = (response.json() or {}).get("en") or []
+    except (requests.RequestException, ValueError):
+        return []
+    found = []
+    for block in blocks:
+        part = (block.get("partOfSpeech") or "").strip()
+        if part.lower() not in {"adjective", "participle", "verb"}:
+            continue
+        for item in block.get("definitions") or []:
+            text = re.sub(r"<[^>]+>", "", item.get("definition") or "")
+            text = re.sub(r"\s+", " ", text).strip()
+            if not text or text.lower().startswith("to "):
+                continue
+            if re.match(r"(simple past|past participle|present participle|inflection of)\b", text, re.I):
+                continue
+            found.append({"part": part, "text": text})
+    rank = {"adjective": 0, "participle": 1, "verb": 2}
+    found.sort(key=lambda sense: rank.get(sense["part"].lower(), 3))
+    return found
+
+
 def _modifier_line(word):
-    entry = wiktionary_entry(word)
-    if not entry or not entry.get("senses"):
+    senses = _describing_senses(word)
+    if not senses:
         return ""
-    preferred = [
-        sense for sense in entry["senses"]
-        if (sense.get("part") or "").lower() in {"adjective", "verb", "participle"}
-    ]
-    sense = (preferred or entry["senses"])[0]
-    part = sense.get("part") or "word"
-    return f"{word} ({part}): {sense['text']}"
+    sense = senses[0]
+    return f"{word} ({sense['part']}): {sense['text']}"
 
 
 def _phrase_summary(modifier, noun):
@@ -2033,28 +2060,134 @@ def _reverso_line(word):
     return match.group(0).strip() if match else ""
 
 
+def _article_for(word):
+    return "An" if (word or "")[:1].lower() in "aeiou" else "A"
+
+
+def _qualities(text):
+    """Traits in an adjective definition that can follow 'is' or 'has'."""
+    body = (text or "")
+    if ":" in body:
+        body = body.split(":", 1)[1]
+    found = []
+    for part in re.split(r",|\band\b", body):
+        part = re.sub(
+            r"\b(the|a|an|capacity for|ability to|power of)\b",
+            "",
+            part,
+            flags=re.IGNORECASE,
+        )
+        part = re.sub(r"\s+", " ", part).strip(" .;")
+        if not part or len(part) > 40:
+            continue
+        if part.lower() in {item.lower() for item in found}:
+            continue
+        found.append(part)
+    return found
+
+
+def _verb_action(word):
+    """The action inside 'to make fertile', without the word 'to'."""
+    try:
+        response = requests.get(
+            "https://en.wiktionary.org/api/rest_v1/page/definition/" + requests.utils.quote(word),
+            headers={"User-Agent": WIKI_USER_AGENT},
+            timeout=8,
+        )
+        if not response.ok:
+            return ""
+        blocks = (response.json() or {}).get("en") or []
+    except (requests.RequestException, ValueError):
+        return ""
+    for block in blocks:
+        if (block.get("partOfSpeech") or "").lower() != "verb":
+            continue
+        for item in block.get("definitions") or []:
+            text = re.sub(r"<[^>]+>", "", item.get("definition") or "")
+            text = re.sub(r"\s+", " ", text).strip()
+            if text.lower().startswith("to "):
+                action = text[3:].rstrip(".")
+                action = re.sub(r"\([^)]*\)", "", action)
+                action = re.sub(r"\s+", " ", action).strip()
+                action = re.sub(r"^make\b", "made", action)
+                action = re.sub(r"^give\b", "given", action)
+                action = re.sub(r"^take\b", "taken", action)
+                return action
+    return ""
+
+
+def _linked_opening(modifier, noun, adjective_text, person):
+    """One opening that uses only words which can follow is or has."""
+    gloss = re.sub(rf"^{re.escape(modifier)}\s*\([^)]+\):\s*", "", adjective_text or "", flags=re.I).strip()
+    article = _article_for(modifier)
+    noun_article = "an" if noun[:1].lower() in "aeiou" else "a"
+    pronoun = "He" if person else "It"
+    if gloss.lower().startswith(("exhibiting ", "having ", "showing ", "marked ", "treated ", "supplied ", "made ")):
+        return f"{article} {modifier} {noun} is {noun_article} {noun} {gloss[0].lower() + gloss[1:].rstrip('.')}."
+    if gloss and not gloss.lower().startswith("to ") and gloss.count(",") < 2:
+        predicate = gloss[0].lower() + gloss[1:].rstrip(".")
+        return f"{article} {modifier} {noun} is {predicate}."
+    if modifier.endswith("ed"):
+        action = _verb_action(modifier[:-1])
+        if action:
+            return f"{article} {modifier} {noun} is {noun_article} {noun} that has been {action}."
+    qualities = [item for item in _qualities(gloss) if not item.lower().startswith("to ")]
+    is_words = [item for item in qualities if " " not in item][:2]
+    has_words = [item for item in qualities if item not in is_words][:4]
+    if is_words:
+        complement = " and ".join(is_words)
+        opening = f"{article} {modifier} {noun} is {complement}."
+    elif has_words:
+        opening = f"{article} {modifier} {noun} has {has_words[0]}."
+        has_words = has_words[1:]
+    elif gloss and not gloss.lower().startswith("to "):
+        opening = f"{article} {modifier} {noun} is {gloss[0].lower() + gloss[1:].rstrip('.')}."
+    else:
+        opening = f"{article} {modifier} {noun} is {noun_article} {noun}."
+    if has_words:
+        traits = has_words[0] if len(has_words) == 1 else ", ".join(has_words[:-1]) + ", and " + has_words[-1]
+        opening += f" {pronoun} has {traits}."
+    return opening
+
+
 def _described_definition(modifier, noun):
     phrase = f"{modifier} {noun}"
-    wiki = _first_sentence(_wikipedia_plain_summary(phrase) or _phrase_summary(modifier, noun))
-    if wiki.lower().startswith(f"a {phrase.lower()}") or wiki.lower().startswith(phrase.lower()):
-        combined = wiki[0].upper() + wiki[1:]
-    elif wiki:
-        combined = f"A {phrase} is {wiki[0].lower() + wiki[1:]}"
-    else:
-        combined = f"A {phrase} is a {noun} that is {modifier}."
     noun_page = _wikipedia_plain_summary(noun)
     adj_page = _wikipedia_plain_summary(modifier)
     noun_mean = (
         "" if _is_disambiguation(noun_page) else _first_sentence(noun_page)
     ) or _plain_dictionary(noun) or _reverso_line(noun)
-    adj_mean = (
-        "" if _is_disambiguation(adj_page) else _first_sentence(adj_page)
-    ) or _modifier_line(modifier) or _reverso_line(modifier)
+    adj_sentence = "" if _is_disambiguation(adj_page) else _first_sentence(adj_page)
+    if adj_sentence and modifier.lower() not in adj_sentence.lower():
+        adj_sentence = ""
+    adj_mean = _modifier_line(modifier) or adj_sentence or _reverso_line(modifier)
+    if not adj_mean and modifier.endswith("ed"):
+        action = _verb_action(modifier[:-1])
+        if action:
+            adj_mean = action
+    person = noun.lower() in {
+        "kid", "child", "student", "person", "man", "woman", "boy", "girl",
+        "teacher", "mother", "father", "baby", "mom", "dad",
+    } or any(mark in (noun_mean or "").lower() for mark in ("person", "child", "human"))
+    phrase_page = _wikipedia_plain_summary(phrase)
+    phrase_line = "" if _is_disambiguation(phrase_page) else _first_sentence(phrase_page)
+    named = phrase_line.lower().startswith(("a ", "an ", phrase.lower()))
+    if named and noun.lower() in phrase_line.lower() and modifier.lower() in phrase_line.lower():
+        combined = phrase_line[0].upper() + phrase_line[1:]
+    else:
+        combined = _linked_opening(modifier, noun, adj_mean, person)
     parts = [
         combined,
         f"{noun}: {noun_mean}" if noun_mean else "",
         f"{modifier}: {adj_mean}" if adj_mean else "",
     ]
+    notes = _duckduckgo_snippets(f"what is a {phrase}")
+    paragraph = re.sub(r"\s+", " ", notes[0] if notes else "").strip()
+    paragraph = re.sub(r"\bHow to use .+ in a sentence\.?", "", paragraph, flags=re.I).strip()
+    if len(paragraph) > 420:
+        paragraph = paragraph[:420].rsplit(" ", 1)[0].rstrip(" ,;") + "."
+    if paragraph:
+        parts.append(paragraph)
     return "\n\n".join(part for part in parts if part)
 
 
