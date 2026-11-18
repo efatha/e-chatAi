@@ -1908,8 +1908,8 @@ def _picture_phrase(phrase):
 
 
 def pexels_search_url(phrase):
-    """https://www.pexels.com/search/smart%20boy/"""
-    return "https://www.pexels.com/search/" + requests.utils.quote(_picture_phrase(phrase)) + "/"
+    """https://www.pexels.com/search/?q=fertilized%20soil"""
+    return "https://www.pexels.com/search/?q=" + requests.utils.quote(_picture_phrase(phrase))
 
 
 def _pexels_thumbs(phrase, limit):
