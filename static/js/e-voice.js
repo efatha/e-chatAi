@@ -26,6 +26,9 @@ if (!SpeechRecognition) {
   recognition.lang = 'en-US';
   recognition.continuous = true;
   recognition.interimResults = true;
+  recognition.maxAlternatives = 1;
+  let onDevice = typeof recognition.processLocally === 'boolean';
+  if (onDevice) recognition.processLocally = true;
 
   let committed = '';
   let sessionFinal = '';
@@ -153,30 +156,29 @@ if (!SpeechRecognition) {
     .join(' ');
 
   const renderTranscript = () => {
-    if (delivered || stopRequested) return;
+    if (delivered) return;
     const next = liveText();
-    if (messageInput.value === next) return;
     messageInput.value = next;
     const end = next.length;
-    if (document.activeElement === messageInput) messageInput.setSelectionRange(end, end);
+    try {
+      messageInput.setSelectionRange(end, end);
+    } catch (error) {
+      /* some mobile browsers reject a selection while the field is not focused */
+    }
     messageInput.scrollTop = messageInput.scrollHeight;
+    messageInput.dispatchEvent(new Event('input', { bubbles: true }));
   };
 
-  const deliver = (spoken) => {
-    if (delivered) return;
+  const finishRecording = () => {
+    const text = (liveText() || messageInput.value).trim();
     stopRequested = true;
+    delivered = true;
     setListening(false);
     stopLevels();
-    const text = (spoken || '').trim();
-    if (!text) {
-      messageInput.value = '';
-      return;
-    }
-    delivered = true;
+    haltRecognition();
     messageInput.value = text;
-    const sendBtn = document.querySelector('.send-message');
-    if (sendBtn) sendBtn.click();
-    if (messageInput.value.trim() === text) messageInput.value = '';
+    messageInput.dispatchEvent(new Event('input', { bubbles: true }));
+    return text;
   };
 
   const haltRecognition = () => {
@@ -191,12 +193,16 @@ if (!SpeechRecognition) {
     }
   };
 
+  const sendRecorded = () => {
+    const text = finishRecording();
+    if (!text) return;
+    const sendBtn = document.querySelector('.send-message');
+    if (sendBtn) sendBtn.click();
+  };
+
   startRecordBtn.addEventListener('click', () => {
     if (listening) {
-      const spoken = liveText() || messageInput.value.trim();
-      stopRequested = true;
-      haltRecognition();
-      deliver(spoken);
+      sendRecorded();
       return;
     }
     stopRequested = false;
@@ -217,15 +223,16 @@ if (!SpeechRecognition) {
 
   messageInput.addEventListener('keydown', (event) => {
     if (event.key !== 'Enter' || event.isComposing || !listening) return;
-    event.preventDefault();
-    const spoken = liveText() || messageInput.value.trim();
-    stopRequested = true;
-    delivered = true;
-    setListening(false);
-    stopLevels();
-    messageInput.value = spoken;
-    haltRecognition();
-  });
+    finishRecording();
+  }, true);
+
+  const sendBtn = document.querySelector('.send-message');
+  if (sendBtn) {
+    sendBtn.addEventListener('click', () => {
+      if (!listening) return;
+      finishRecording();
+    }, true);
+  }
 
   recognition.onstart = () => {
     if (!stopRequested) return;
@@ -233,7 +240,7 @@ if (!SpeechRecognition) {
   };
 
   recognition.onresult = (event) => {
-    if (stopRequested || delivered) return;
+    if (delivered) return;
     sessionFinal = '';
     sessionInterim = '';
     for (let i = 0; i < event.results.length; i += 1) {
@@ -244,22 +251,32 @@ if (!SpeechRecognition) {
     renderTranscript();
   };
 
+  const resume = () => {
+    if (stopRequested || delivered || !listening) return;
+    try {
+      recognition.start();
+    } catch (error) {
+      /* a start is already in flight */
+    }
+  };
+
   recognition.onend = () => {
     if (stopRequested || delivered) return;
     committed = liveText();
     sessionFinal = '';
     sessionInterim = '';
     renderTranscript();
-    if (!listening) return;
-    try {
-      recognition.start();
-    } catch (error) {
-      deliver(committed);
-    }
+    resume();
   };
 
   recognition.onerror = (event) => {
     if (event.error === 'no-speech' || event.error === 'aborted') return;
+    if (onDevice && (event.error === 'language-not-supported' || event.error === 'service-not-allowed')) {
+      onDevice = false;
+      recognition.processLocally = false;
+      resume();
+      return;
+    }
     console.error('Speech recognition error:', event.error);
     if (event.error === 'not-allowed' || event.error === 'service-not-allowed' || event.error === 'audio-capture') {
       stopRequested = true;
