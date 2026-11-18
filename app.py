@@ -151,6 +151,7 @@ _IMAGE_HOSTS = (
     ".googleusercontent.com",
     ".wikimedia.org",
     ".content.ces.ncsu.edu",
+    ".pexels.com",
 )
 
 
@@ -170,7 +171,13 @@ def chat_image():
             raw,
             headers={
                 "User-Agent": "Mozilla/5.0",
-                "Referer": "https://www.google.com/" if "google" in host or "gstatic" in host else "https://www.bing.com/",
+                "Referer": (
+                    "https://www.pexels.com/"
+                    if "pexels" in host
+                    else "https://www.google.com/"
+                    if "google" in host or "gstatic" in host
+                    else "https://www.bing.com/"
+                ),
             },
             timeout=12,
         )

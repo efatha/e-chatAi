@@ -1876,7 +1876,7 @@ def _humidity_word(value):
 
 
 _DESCRIBED_RE = re.compile(
-    r"^what(?:'s| is)\s+(?:a|an)\s+([A-Za-z][\w'-]*)\s+([A-Za-z][\w'-]*)\s*[?.!]*$",
+    r"^what(?:'s| is)\s+(?:a|an|the)\s+([A-Za-z][\w'-]*)\s+([A-Za-z][\w'-]*)\s*[?.!]*$",
     re.IGNORECASE,
 )
 
@@ -1893,6 +1893,43 @@ def _image_card(phrase, thumb, page):
         "creator": "illustrative image",
         "license": "e-chat",
     }
+
+
+def _pexels_thumbs(phrase, limit):
+    """Pictures from a Pexels search, sized for the chat."""
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+        ),
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+    try:
+        page = requests.get(
+            "https://www.pexels.com/search/" + requests.utils.quote(phrase) + "/",
+            headers=headers,
+            timeout=12,
+        )
+        page.raise_for_status()
+    except requests.RequestException:
+        return []
+    thumbs = []
+    seen = set()
+    for match in re.finditer(
+        r"https://images\.pexels\.com/photos/(\d+)/[^\"'\\?\s]+",
+        page.text,
+    ):
+        photo_id = match.group(1)
+        if photo_id in seen:
+            continue
+        seen.add(photo_id)
+        thumbs.append(
+            "https://images.pexels.com/photos/"
+            f"{photo_id}/pexels-photo-{photo_id}.jpeg?auto=compress&cs=tinysrgb&w=640"
+        )
+        if len(thumbs) >= limit:
+            break
+    return thumbs
 
 
 def _bing_image_thumbs(phrase, limit):
@@ -1954,6 +1991,10 @@ def google_images(phrase, limit=3):
     except (requests.RequestException, ValueError):
         results = []
     found = []
+    for thumb in _pexels_thumbs(phrase, limit):
+        found.append(_image_card(phrase, thumb, page))
+    if len(found) >= limit:
+        return found[:limit]
     for item in results:
         thumb = item.get("thumbnail") or ""
         if not thumb.startswith("https://") or thumb in {photo["thumbnail"] for photo in found}:
