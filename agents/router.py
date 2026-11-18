@@ -521,7 +521,7 @@ def answer_question(
                 "provider": "duckduckgo",
             }
 
-    if text and not has_file and detect_lookup(text):
+    if text and not has_file and (composed_words(text) or detect_lookup(text)):
         defined = _definition_from_local_or_wikipedia(text, independent, username)
         if defined:
             return defined
@@ -758,7 +758,10 @@ def _yes_no_reply(text, history, conversation, username):
 def _definition_from_local_or_wikipedia(text, independent, username):
     """Definition questions go straight to Wikipedia."""
     del independent
+    pair = composed_words(text)
     found = detect_lookup(text)
+    if pair:
+        found = {"kind": "topic", "term": f"{pair[0]} {pair[1]}"}
     if not found:
         return None
     external = wikipedia_definition(found["term"], text)

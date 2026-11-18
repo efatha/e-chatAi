@@ -1876,7 +1876,7 @@ def _humidity_word(value):
 
 
 _DESCRIBED_RE = re.compile(
-    r"^what(?:'s| is)\s+(?:a|an|the)\s+([A-Za-z][\w'-]*)\s+([A-Za-z][\w'-]*)\s*[?.!]*$",
+    r"^what(?:(?:'s| is))?\s+(?:a|an|the)\s+([A-Za-z][\w'-]*)\s+([A-Za-z][\w'-]*)\s*[?.!]*$",
     re.IGNORECASE,
 )
 
@@ -1953,15 +1953,46 @@ def _pexels_thumbs(phrase, limit):
 
 
 def google_images(phrase, limit=3):
-    """Two or three pictures of the two words, from that Pexels search."""
+    """Two or three pictures of the two words. Commons answers from the hosted server."""
     words = _picture_phrase(phrase)
     if len(words.split()) < 2:
         return []
-    search = pexels_search_url(words)
-    return [
-        _image_card(words, thumb, search)
-        for thumb in _pexels_thumbs(words, limit)
-    ]
+    try:
+        response = requests.get(
+            "https://commons.wikimedia.org/w/api.php",
+            params={
+                "action": "query",
+                "generator": "search",
+                "gsrsearch": words,
+                "gsrnamespace": 6,
+                "gsrlimit": 8,
+                "prop": "imageinfo",
+                "iiprop": "url",
+                "iiurlwidth": 640,
+                "format": "json",
+            },
+            headers={"User-Agent": WIKI_USER_AGENT},
+            timeout=12,
+        )
+        response.raise_for_status()
+        pages = ((response.json() or {}).get("query") or {}).get("pages") or {}
+    except (requests.RequestException, ValueError):
+        return []
+    found = []
+    for page in pages.values():
+        info = (page.get("imageinfo") or [{}])[0]
+        thumb = info.get("thumburl") or ""
+        title = page.get("title") or ""
+        if not thumb.startswith("https://") or not re.search(r"\.(?:jpe?g|png|webp)(?:\?|$)", thumb, re.I):
+            continue
+        found.append(_image_card(
+            words,
+            thumb,
+            "https://commons.wikimedia.org/wiki/" + requests.utils.quote(title.replace(" ", "_")),
+        ))
+        if len(found) >= limit:
+            break
+    return found
 
 
 def image_lookups(phrase):
