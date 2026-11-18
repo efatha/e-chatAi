@@ -1865,8 +1865,100 @@ def _humidity_word(value):
     return "Very humid"
 
 
+_DESCRIBED_RE = re.compile(
+    r"^what(?:'s| is)\s+(?:a|an)\s+([A-Za-z][\w'-]*)\s+([A-Za-z][\w'-]*)\s*[?.!]*$",
+    re.IGNORECASE,
+)
+
+
+def described_pair(question):
+    """'what is a fertilized soil' -> ('fertilized', 'soil'). One word stays a normal lookup."""
+    match = _DESCRIBED_RE.match(re.sub(r"\s+", " ", (question or "").strip()))
+    if not match:
+        return None
+    return match.group(1), match.group(2)
+
+
+def _word_stem(word):
+    lowered = (word or "").lower()
+    for ending in ("ized", "ised", "ied", "ed", "ing", "er", "est"):
+        if len(lowered) > len(ending) + 3 and lowered.endswith(ending):
+            return lowered[: -len(ending)]
+    return lowered
+
+
+def _modifier_line(word):
+    entry = wiktionary_entry(word)
+    if not entry or not entry.get("senses"):
+        return ""
+    preferred = [
+        sense for sense in entry["senses"]
+        if (sense.get("part") or "").lower() in {"adjective", "verb", "participle"}
+    ]
+    sense = (preferred or entry["senses"])[0]
+    part = sense.get("part") or "word"
+    return f"{word} ({part}): {sense['text']}"
+
+
+def _phrase_summary(modifier, noun):
+    """A Wikipedia intro that actually mentions both the description and the noun."""
+    phrase = f"{modifier} {noun}"
+    stem = _word_stem(modifier)
+    try:
+        response = requests.get(
+            "https://en.wikipedia.org/w/api.php",
+            params={
+                "action": "query",
+                "list": "search",
+                "srsearch": phrase,
+                "srlimit": 5,
+                "format": "json",
+            },
+            headers={"User-Agent": WIKI_USER_AGENT},
+            timeout=16,
+        )
+        response.raise_for_status()
+        hits = (response.json().get("query") or {}).get("search") or []
+    except (requests.RequestException, ValueError):
+        return ""
+    noun_l = noun.lower()
+    for hit in hits:
+        title = hit.get("title") or ""
+        summary = _wikipedia_plain_summary(title)
+        if not summary or _is_disambiguation(summary):
+            continue
+        lowered = summary.lower()
+        if noun_l in lowered and (modifier.lower() in lowered or stem in lowered):
+            return summary
+    return ""
+
+
+def _described_definition(modifier, noun):
+    joint = _phrase_summary(modifier, noun)
+    modifier_line = _modifier_line(modifier)
+    noun_text = _resolved_summary(noun)
+    noun_dict = _plain_dictionary(noun)
+    if joint:
+        lead = joint
+    elif modifier_line:
+        lead = f"- A {modifier} {noun} is a {noun} that is {modifier}. {modifier_line}"
+    else:
+        return None
+    parts = [lead]
+    if noun_text and noun_text not in lead:
+        parts.append(noun_text)
+    if noun_dict and noun_dict not in lead:
+        parts.append(noun_dict)
+    return "\n\n".join(parts)
+
+
 def wikipedia_definition(term, question=""):
     """Wikipedia article text, with a plain dictionary line for one word."""
+    pair = described_pair(question)
+    if pair:
+        described = _described_definition(*pair)
+        if described:
+            return described
     subject = (term or "").strip()
     if not subject:
         return None
@@ -1885,6 +1977,10 @@ def wikipedia_definition(term, question=""):
     if not direct:
         return None
     line = _plain_dictionary(subject)
+    if not line and " " not in subject:
+        title = _suggested_word(subject)
+        if title:
+            line = _plain_dictionary(title.lower())
     if line:
         return direct + "\n\n" + line
     return direct
@@ -1908,6 +2004,14 @@ def _resolved_summary(subject):
     if summary and not _is_disambiguation(summary):
         return summary
     if not summary:
+        if " " in subject.strip():
+            return None
+        title = _suggested_word(subject)
+        if not title:
+            return None
+        corrected = _wikipedia_plain_summary(title)
+        if corrected and not _is_disambiguation(corrected):
+            return corrected
         return None
     for title in (_referred_title(summary), _sense_title(summary), _search_title(subject)):
         if not title or title.lower() == subject.lower():
@@ -1943,6 +2047,57 @@ def _sense_title(summary):
     if words and words[-1].lower() in {"intelligence", "selfishness"}:
         return words[-1]
     return phrase or None
+
+
+def _suggested_word(word):
+    """The closest real headword when the asked spelling is one letter off."""
+    asked = (word or "").strip()
+    if " " in asked or len(asked) < 4:
+        return None
+    try:
+        response = requests.get(
+            "https://en.wikipedia.org/w/api.php",
+            params={
+                "action": "opensearch",
+                "search": asked,
+                "limit": 6,
+                "namespace": 0,
+                "format": "json",
+            },
+            headers={"User-Agent": WIKI_USER_AGENT},
+            timeout=16,
+        )
+        response.raise_for_status()
+        titles = (response.json() or [None, []])[1]
+    except (requests.RequestException, ValueError, IndexError):
+        return None
+    for title in titles:
+        head = re.split(r"[\s(:]", title.strip())[0]
+        if head and _one_edit(asked, head):
+            return head
+    return None
+
+
+def _one_edit(asked, title):
+    """True when the asked word is one letter away from the page title."""
+    head = re.split(r"[\s(:]", (title or "").strip())[0].lower()
+    asked = re.sub(r"[^a-z]", "", (asked or "").lower())
+    if not asked or not head or abs(len(asked) - len(head)) > 1:
+        return False
+    if len(asked) == len(head):
+        return sum(left != right for left, right in zip(asked, head)) == 1
+    longer, shorter = (asked, head) if len(asked) > len(head) else (head, asked)
+    index = shorter_index = skips = 0
+    while index < len(longer) and shorter_index < len(shorter):
+        if longer[index] == shorter[shorter_index]:
+            index += 1
+            shorter_index += 1
+            continue
+        skips += 1
+        if skips > 1:
+            return False
+        index += 1
+    return shorter_index == len(shorter) and skips + (len(longer) - index) <= 1
 
 
 def _search_title(term):
@@ -3799,6 +3954,233 @@ def _spoken_note(note):
     if len(text) > 280:
         text = text[:280].rsplit(" ", 1)[0]
     return text[0].lower() + text[1:].rstrip(".") + "."
+
+
+_CONDITIONS_RE = re.compile(
+    r"^(?:give(?:\s+me)?|list|what are)\s+(\d+)\s+"
+    r"(conditions?|steps?|requirements?|ways?|tips?|rules?)\s+"
+    r"(?:to|for|of|that)\s+(.+?)\s*[?.!]*$",
+    re.IGNORECASE,
+)
+_CONDITION_HOSTS = (
+    "content.ces.ncsu.edu",
+    "www.britannica.com",
+    "www.fao.org",
+)
+
+
+def _article_extract(title):
+    try:
+        response = requests.get(
+            "https://en.wikipedia.org/w/api.php",
+            params={
+                "action": "query",
+                "prop": "extracts",
+                "explaintext": 1,
+                "titles": title,
+                "format": "json",
+            },
+            headers={"User-Agent": WIKI_USER_AGENT},
+            timeout=16,
+        )
+        response.raise_for_status()
+        pages = (response.json().get("query") or {}).get("pages") or {}
+    except (requests.RequestException, ValueError):
+        return ""
+    for page in pages.values():
+        if page.get("missing") is not None:
+            continue
+        return page.get("extract") or ""
+    return ""
+
+
+def _listed_factors(sentence):
+    match = re.search(r"\binclude\s+(.+)", sentence, re.IGNORECASE)
+    if not match:
+        return []
+    body = match.group(1).strip(" .")
+    parts = [part.strip() for part in body.split(",")]
+    factors = []
+    for part in parts:
+        pieces = re.split(r"\s+and\s+", part, flags=re.IGNORECASE)
+        factors.extend(piece.strip() for piece in pieces if len(piece.strip()) > 2)
+    return factors
+
+
+def _source_pages(topic):
+    """Pages on the requested reference sites that discuss this subject."""
+    headers = {"User-Agent": "Mozilla/5.0", "Accept-Language": "en"}
+    searches = (
+        ("content.ces.ncsu.edu", "https://content.ces.ncsu.edu/", {"s": topic}),
+        ("www.fao.org", "https://www.fao.org/search/en/", {"q": topic}),
+        ("www.britannica.com", "https://www.britannica.com/search", {"query": topic}),
+    )
+    found = []
+    for host, url, params in searches:
+        try:
+            response = requests.get(url, params=params, headers=headers, timeout=12)
+            if not response.ok:
+                continue
+        except requests.RequestException:
+            continue
+        titles = re.findall(
+            r'class="publication"[\s\S]{0,500}?href="(https?://[^"]+)"[\s\S]{0,240}?class="title">([^<]+)',
+            response.text,
+            flags=re.I,
+        )
+        noun = topic.split()[-1].lower()
+        boost = ("germin", "seed", "propagat") if any(
+            word in topic.lower() for word in ("germin", "seed", "propagat", "plant")
+        ) else ()
+        titles.sort(key=lambda item: (
+            noun not in item[1].lower(),
+            not any(word in item[1].lower() for word in boost),
+        ))
+        candidates = [href for href, _title in titles]
+        for href in candidates:
+            if host not in href or href.lower().endswith(".pdf"):
+                continue
+            if any(skip in href for skip in ("/search", "/login", "favicon", "/images/", "org-chart")):
+                continue
+            if href not in found:
+                found.append(href)
+            if len(found) >= 6:
+                break
+    return found
+
+
+def _page_conditions(url, topic):
+    headers = {"User-Agent": "Mozilla/5.0", "Accept-Language": "en"}
+    try:
+        response = requests.get(url, headers=headers, timeout=16)
+        if not response.ok or "text/html" not in (response.headers.get("content-type") or ""):
+            return None
+    except requests.RequestException:
+        return None
+    html_text = response.text
+    plain = re.sub(r"<script[\s\S]*?</script>|<style[\s\S]*?</style>", " ", html_text, flags=re.I)
+    plain = re.sub(r"<[^>]+>", " ", plain)
+    plain = html.unescape(re.sub(r"\s+", " ", plain))
+    stem = topic.split()[-1].lower()
+    stems = {stem, stem.rstrip("s")}
+    sentences = [
+        part.strip()
+        for part in re.split(r"(?<=[.])\s+", plain)
+        if len(part.strip()) > 40
+    ]
+    clauses = []
+    for sentence in sentences:
+        lowered = sentence.lower()
+        if not any(word in lowered for word in stems):
+            continue
+        if len(sentence) > 320 or "table" in lowered:
+            continue
+        if not re.search(r"\b(sow|sown|sowing|planted|planting|soil|water|moisture|temperature|frost|depth|sunlight|full sun)\b", lowered):
+            continue
+        clauses.append(sentence)
+        if len(clauses) == 6:
+            break
+    if not clauses:
+        return None
+    images = []
+    for src in re.findall(r'<img[^>]+src="([^"]+)"', html_text, flags=re.I):
+        if not re.search(r"\.(?:jpe?g|png|webp)(?:\?|$)", src, re.I):
+            continue
+        if re.search(r"logo|icon|sprite|avatar", src, re.I):
+            continue
+        full = requests.compat.urljoin(url, src)
+        if full in {item["thumbnail"] for item in images}:
+            continue
+        images.append({
+            "thumbnail": full,
+            "page": url,
+            "title": topic,
+            "creator": requests.compat.urlparse(url).netloc,
+            "license": "Illustration on the source page",
+        })
+        if len(images) == 3:
+            break
+    images.sort(key=lambda item: "germin" not in item["thumbnail"].lower())
+    return {"clauses": clauses, "images": images, "url": url}
+
+
+def _research_links(topic):
+    """Open pages from university extension, FAO, Britannica, and the other reference sites."""
+    links = []
+    headers = {"User-Agent": "Mozilla/5.0", "Accept-Language": "en"}
+    try:
+        response = requests.post(
+            "https://html.duckduckgo.com/html/",
+            data={"q": f"conditions for {topic} site:edu"},
+            headers=headers,
+            timeout=12,
+        )
+        if response.ok and "challenge-form" not in response.text:
+            for href in re.findall(r'href="(https?://[^"]+)"', response.text):
+                host = requests.compat.urlparse(href).netloc
+                if "edu" not in host and "fao.org" not in host:
+                    continue
+                if href.lower().endswith(".pdf") or href in links:
+                    continue
+                links.append(href)
+                if len(links) >= 4:
+                    break
+    except requests.RequestException:
+        pass
+    for href in _source_pages(topic):
+        if href not in links:
+            links.append(href)
+        if len(links) >= 4:
+            break
+    return links[:4]
+
+
+def conditions_reply(message):
+    """A counted plant or general request, filled from research pages up to that number."""
+    match = _CONDITIONS_RE.match(re.sub(r"\s+", " ", (message or "").strip()))
+    if not match:
+        return None
+    count = max(1, min(int(match.group(1)), 6))
+    kind = match.group(2).lower()
+    asked = match.group(3).strip()
+    topic = re.sub(r"^(?:have|get|make|do)\s+", "", asked, flags=re.IGNORECASE)
+    if re.search(r"\b(plant|grow|sow|planting|growing)\b", topic, re.IGNORECASE):
+        topic = "planting " + re.sub(
+            r"^(?:plant|grow|sow|planting|growing)\s+",
+            "",
+            topic,
+            flags=re.IGNORECASE,
+        )
+    chosen = []
+    images = []
+    source = ""
+    for url in _research_links(topic):
+        page = _page_conditions(url, topic)
+        if not page:
+            continue
+        if not source:
+            source = page["url"]
+        for clause in page["clauses"]:
+            if clause not in chosen:
+                chosen.append(clause)
+            if len(chosen) >= count:
+                break
+        for image in page["images"]:
+            if image["thumbnail"] not in {item["thumbnail"] for item in images}:
+                images.append(image)
+        if len(chosen) >= count:
+            break
+    if not chosen:
+        return None
+    host = requests.compat.urlparse(source).netloc
+    label = kind if len(chosen) == 1 else kind
+    lines = [f"{count} {label} for {topic}, from [{host}]({source}):"]
+    lines.extend(f"{index}. {clause}" for index, clause in enumerate(chosen[:count], start=1))
+    if len(chosen) < count:
+        lines.append(
+            f"The research pages named {len(chosen)}, not {count}, so nothing is added to reach {count}."
+        )
+    return {"text": "\n".join(lines), "images": images[:3]}
 
 
 def looks_like_open_question(text):

@@ -385,7 +385,10 @@ const renderStoredMessage = (item) => {
     element.querySelector(".message-text").classList.add("weather-bubble");
     element.querySelector(".message-text").appendChild(renderWeather(item.weather));
   }
-  if (item.commons) element.querySelector(".message-text").appendChild(renderCommons(item.commons));
+  const storedPhotos = Array.isArray(item.commons)
+    ? item.commons
+    : (item.commons ? [item.commons] : []);
+  storedPhotos.forEach((photo) => element.querySelector(".message-text").appendChild(renderCommons(photo)));
   if (item.translation) element.querySelector(".message-text").appendChild(renderTranslation(item.translation));
   if (item.sports && item.sports.kind === "standing") {
     element.classList.add("has-standings");
@@ -677,33 +680,10 @@ const generateEchatResponse = async (incomingMsgDiv, conversationId, sentMessage
       const sportsPhoto = renderPortrait(data.portrait);
       if (sportsPhoto) msgElement.appendChild(sportsPhoto);
       if (data.translation) msgElement.appendChild(renderTranslation(data.translation));
-      if (data.commons && data.commons.thumbnail) {
-        const figure = document.createElement("figure");
-        figure.className = "commons-photo";
-        const image = document.createElement("img");
-        image.src = data.commons.thumbnail;
-        image.alt = data.commons.title || "Wikimedia Commons image";
-        figure.appendChild(image);
-        const caption = document.createElement("figcaption");
-        const credit = document.createElement("a");
-        credit.href = data.commons.page;
-        credit.target = "_blank";
-        credit.rel = "noopener";
-        credit.textContent = data.commons.creator || "Wikimedia Commons";
-        caption.appendChild(credit);
-        caption.appendChild(document.createTextNode(" · " + (data.commons.license || "Commons")));
-        if (data.commons.license_url) {
-          const license = document.createElement("a");
-          license.href = data.commons.license_url;
-          license.target = "_blank";
-          license.rel = "noopener";
-          license.textContent = "license";
-          caption.appendChild(document.createTextNode(" · "));
-          caption.appendChild(license);
-        }
-        figure.appendChild(caption);
-        msgElement.appendChild(figure);
-      }
+      const photos = Array.isArray(data.commons)
+        ? data.commons
+        : (data.commons && data.commons.thumbnail ? [data.commons] : []);
+      photos.forEach((photo) => msgElement.appendChild(renderCommons(photo)));
       if (typeof data.portrait === "string" && data.portrait) {
         const photo = document.createElement("img");
         photo.className = "creator-photo";

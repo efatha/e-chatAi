@@ -22,6 +22,13 @@ STOPWORDS = {
     "what", "why", "how", "does", "do", "can", "you", "me", "my", "i", "we",
     "please", "explain", "tell", "about",
 }
+_GENERIC_TERMS = {
+    "condition", "conditions", "definition", "example", "examples", "following",
+    "between", "number", "something", "different", "important", "function",
+    "means", "using", "about", "there", "their", "which", "where", "would",
+    "could", "should", "give", "have",
+}
+
 FOCUS = {
     "contrapositive", "converse", "induction", "contradiction", "quantifier",
     "quantifiers", "subset", "biconditional", "negation", "irrational",
@@ -207,6 +214,7 @@ class BookAgent:
             token for token in query
             if len(token) >= 5 or token in FOCUS
         }
+        specific = important - _GENERIC_TERMS
         concept = _semantic_concept(message)
         concept_key, concept_groups = concept if concept else (None, ())
         related = _related_terms(query)
@@ -239,6 +247,8 @@ class BookAgent:
                     )
                     if concept_hits < 2:
                         continue
+                elif specific and not (specific & chunk_tokens):
+                    continue
                 elif important and not (important & chunk_tokens):
                     if len(related & chunk_tokens) < 2:
                         continue
@@ -684,9 +694,20 @@ def _page_anchors(text):
     return ()
 
 
+_PLANT_WORDS = {
+    "plant", "plants", "bean", "beans", "seed", "seeds", "soil", "germination",
+    "germinate", "botany", "botanique", "crop", "crops", "garden", "flower",
+    "leaf", "leaves", "root", "roots", "sow", "sowing", "seedling",
+}
+
+
 def _on_topic(message, title, text):
     """A statistics question must come from a statistics page, not a chance use of one word."""
     lowered = (message or "").lower()
+    if any(word in _tokens(lowered) for word in _PLANT_WORDS):
+        blob = f"{title} {text}".lower()
+        if not any(mark in blob for mark in ("botan", "horticult", "agricult", "germination", "seedling")):
+            return False
     if "statistic" not in lowered:
         return True
     blob = f"{title} {text}".lower()

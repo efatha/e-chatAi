@@ -12,6 +12,7 @@ from agents.independent_agent import (
 )
 from agents.book_agent import BookAgent
 from agents.knowledge_agent import (
+    described_pair,
     detect_lookup,
     looks_like_open_question,
     search_result_text,
@@ -24,6 +25,7 @@ from agents.knowledge_agent import (
     why_reply,
     translate_reply,
     weather_reply,
+    conditions_reply,
     wikipedia_definition,
     wikipedia_summary,
 )
@@ -548,6 +550,16 @@ def answer_question(
             }
 
     if text and not has_file:
+        listed = conditions_reply(text)
+        if listed:
+            result = {
+                "response": _with_name(listed["text"], username),
+                "source": "knowledge",
+                "provider": "reference",
+            }
+            if listed.get("images"):
+                result["commons"] = listed["images"]
+            return result
         from_books = book_agent().answer(text)
         if from_books:
             reply = from_books["response"]
@@ -753,7 +765,9 @@ def _definition_from_local_or_wikipedia(text, independent, username):
         "source": "knowledge",
         "provider": "wikipedia",
     }
-    photo = wikidata_image(found["term"]) or commons_image(found["term"])
+    pair = described_pair(text)
+    photo_term = pair[1] if pair else found["term"]
+    photo = wikidata_image(photo_term) or commons_image(photo_term)
     if photo:
         result["commons"] = photo
     return result
