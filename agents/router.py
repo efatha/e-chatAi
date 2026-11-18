@@ -17,6 +17,9 @@ from agents.knowledge_agent import (
     looks_like_open_question,
     search_result_text,
     commons_image,
+    commons_images,
+    composed_words,
+    google_images,
     picture_request,
     wikidata_current,
     wikidata_image,
@@ -480,17 +483,18 @@ def answer_question(
     if text and not has_file:
         pictured = picture_request(text)
         if pictured:
-            photo = commons_image(pictured)
-            if photo:
+            photos = google_images(pictured, 3) if len(pictured.split()) >= 2 else commons_images(pictured, 3)
+            if photos:
+                source_name = "an illustrative image" if len(pictured.split()) >= 2 else "Wikimedia Commons"
                 reply = _with_name(
-                    f"Here is a picture of {pictured} from Wikimedia Commons.",
+                    f"Here is a picture of {pictured} from {source_name}.",
                     username,
                 )
                 return {
                     "response": reply,
                     "source": "knowledge",
                     "provider": "commons",
-                    "commons": photo,
+                    "commons": photos if len(photos) > 1 else photos[0],
                     "focus": {"topic": pictured, "kind": "picture"},
                 }
             return {
@@ -765,11 +769,16 @@ def _definition_from_local_or_wikipedia(text, independent, username):
         "source": "knowledge",
         "provider": "wikipedia",
     }
-    pair = described_pair(text)
-    photo_term = pair[1] if pair else found["term"]
-    photo = wikidata_image(photo_term) or commons_image(photo_term)
-    if photo:
-        result["commons"] = photo
+    pair = composed_words(text)
+    if pair:
+        phrase = f"{pair[0]} {pair[1]}"
+        photos = google_images(phrase, 3)
+        if photos:
+            result["commons"] = photos
+    else:
+        photo = wikidata_image(found["term"]) or commons_image(found["term"])
+        if photo:
+            result["commons"] = photo
     return result
 
 

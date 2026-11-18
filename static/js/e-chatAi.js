@@ -388,7 +388,12 @@ const renderStoredMessage = (item) => {
   const storedPhotos = Array.isArray(item.commons)
     ? item.commons
     : (item.commons ? [item.commons] : []);
-  storedPhotos.forEach((photo) => element.querySelector(".message-text").appendChild(renderCommons(photo)));
+  storedPhotos.forEach((photo) => {
+    const figure = renderCommons(photo);
+    const host = element.querySelector(".message-text");
+    if (photo.place === "top") host.prepend(figure);
+    else host.appendChild(figure);
+  });
   if (item.translation) element.querySelector(".message-text").appendChild(renderTranslation(item.translation));
   if (item.sports && item.sports.kind === "standing") {
     element.classList.add("has-standings");
@@ -683,7 +688,11 @@ const generateEchatResponse = async (incomingMsgDiv, conversationId, sentMessage
       const photos = Array.isArray(data.commons)
         ? data.commons
         : (data.commons && data.commons.thumbnail ? [data.commons] : []);
-      photos.forEach((photo) => msgElement.appendChild(renderCommons(photo)));
+      photos.forEach((photo) => {
+        const figure = renderCommons(photo);
+        if (photo.place === "top") msgElement.prepend(figure);
+        else msgElement.appendChild(figure);
+      });
       if (typeof data.portrait === "string" && data.portrait) {
         const photo = document.createElement("img");
         photo.className = "creator-photo";

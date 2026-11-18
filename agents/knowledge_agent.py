@@ -148,17 +148,24 @@ def picture_request(message):
 
 def commons_image(term):
     """One free image from Wikimedia Commons, with credit and a license."""
+    photos = commons_images(term, limit=1)
+    return photos[0] if photos else None
+
+
+def commons_images(term, limit=3):
+    """Several free images for a phrase such as 'intelligent student'."""
     subject = (term or "").strip()
     if not subject:
-        return None
-    photo = _fresh_commons_image(subject)
-    if photo:
-        _remember_image(subject, photo)
-        return photo
-    return _remembered_image(subject)
+        return []
+    photos = _fresh_commons_images(subject, limit)
+    if photos:
+        _remember_image(subject, photos[0])
+        return photos
+    remembered = _remembered_image(subject)
+    return [remembered] if remembered else []
 
 
-def _fresh_commons_image(subject):
+def _fresh_commons_images(subject, limit=3):
     try:
         response = requests.get(
             "https://commons.wikimedia.org/w/api.php",
@@ -180,7 +187,8 @@ def _fresh_commons_image(subject):
         pages = (response.json().get("query") or {}).get("pages") or {}
     except (requests.RequestException, ValueError) as exc:
         logger.warning("Commons search failed: %s", type(exc).__name__)
-        return None
+        return []
+    photos = []
     for page in pages.values():
         info = (page.get("imageinfo") or [None])[0] or {}
         mime = (info.get("mime") or "").lower()
@@ -190,15 +198,17 @@ def _fresh_commons_image(subject):
         meta = info.get("extmetadata") or {}
         title = page.get("title") or subject
         slug = title.replace(" ", "_")
-        return {
+        photos.append({
             "thumbnail": thumb,
             "page": "https://commons.wikimedia.org/wiki/" + requests.utils.quote(slug),
             "title": title.replace("File:", ""),
             "creator": _meta_text(meta, "Artist") or "Unknown creator",
             "license": _meta_text(meta, "LicenseShortName") or "See the Commons page",
             "license_url": _meta_text(meta, "LicenseUrl"),
-        }
-    return None
+        })
+        if len(photos) >= limit:
+            break
+    return photos
 
 
 _OFFICE = re.compile(
@@ -1871,6 +1881,71 @@ _DESCRIBED_RE = re.compile(
 )
 
 
+def google_image_url(phrase):
+    return "https://www.google.com/search?udm=2&q=" + requests.utils.quote(phrase)
+
+
+def google_images(phrase, limit=3):
+    """Pictures for a phrase, shown in the chat."""
+    page = google_image_url(phrase)
+    headers = {"User-Agent": "Mozilla/5.0", "Accept-Language": "en"}
+    try:
+        home = requests.get(
+            "https://duckduckgo.com/",
+            params={"q": phrase},
+            headers=headers,
+            timeout=12,
+        )
+        token = ""
+        for part in home.text.split("vqd="):
+            if part[:1] in "\"'":
+                token = part[1:].split(part[0], 1)[0]
+                break
+        if not token:
+            return []
+        images = requests.get(
+            "https://duckduckgo.com/i.js",
+            params={"q": phrase, "vqd": token, "o": "json", "l": "us-en", "p": "1"},
+            headers=headers,
+            timeout=12,
+        )
+        results = (images.json() or {}).get("results") or []
+    except (requests.RequestException, ValueError):
+        return []
+    found = []
+    for item in results:
+        thumb = item.get("thumbnail") or ""
+        if not thumb.startswith("https://") or thumb in {photo["thumbnail"] for photo in found}:
+            continue
+        found.append({
+            "thumbnail": thumb,
+            "page": item.get("url") or thumb,
+            "title": phrase,
+            "creator": "illustrative image",
+            "license": "e-chat",
+        })
+        if len(found) >= limit:
+            break
+    return found
+
+
+def image_lookups(phrase):
+    """The Google Images search for a composed phrase."""
+    return f"Images of this phrase: [Google Images]({google_image_url(phrase)})."
+
+
+def composed_words(question):
+    """('intelligent', 'student') with a one-letter misspelling corrected."""
+    pair = described_pair(question)
+    if not pair:
+        return None
+    modifier, noun = pair
+    fixed = _suggested_word(modifier)
+    if fixed and _one_edit(modifier, fixed):
+        modifier = fixed.lower()
+    return modifier, noun
+
+
 def described_pair(question):
     """'what is a fertilized soil' -> ('fertilized', 'soil'). One word stays a normal lookup."""
     match = _DESCRIBED_RE.match(re.sub(r"\s+", " ", (question or "").strip()))
@@ -1933,28 +2008,59 @@ def _phrase_summary(modifier, noun):
     return ""
 
 
+def _first_sentence(summary):
+    text = re.sub(r"^-\s*", "", (summary or "").strip())
+    if not text:
+        return ""
+    return re.split(r"(?<=[.])\s+", text)[0].strip()
+
+
+def _reverso_line(word):
+    """One English definition from Reverso when Wikipedia has no sentence."""
+    try:
+        response = requests.get(
+            "https://dictionary.reverso.net/english-definition/" + requests.utils.quote(word),
+            headers={"User-Agent": "Mozilla/5.0", "Accept-Language": "en"},
+            timeout=12,
+        )
+        if not response.ok:
+            return ""
+    except requests.RequestException:
+        return ""
+    plain = re.sub(r"<[^>]+>", " ", response.text)
+    plain = re.sub(r"\s+", " ", html.unescape(plain))
+    match = re.search(r"\b(?:n|adj|v)\s+(.{25,180}?)\.", plain, re.IGNORECASE)
+    return match.group(0).strip() if match else ""
+
+
 def _described_definition(modifier, noun):
-    joint = _phrase_summary(modifier, noun)
-    modifier_line = _modifier_line(modifier)
-    noun_text = _resolved_summary(noun)
-    noun_dict = _plain_dictionary(noun)
-    if joint:
-        lead = joint
-    elif modifier_line:
-        lead = f"- A {modifier} {noun} is a {noun} that is {modifier}. {modifier_line}"
+    phrase = f"{modifier} {noun}"
+    wiki = _first_sentence(_wikipedia_plain_summary(phrase) or _phrase_summary(modifier, noun))
+    if wiki.lower().startswith(f"a {phrase.lower()}") or wiki.lower().startswith(phrase.lower()):
+        combined = wiki[0].upper() + wiki[1:]
+    elif wiki:
+        combined = f"A {phrase} is {wiki[0].lower() + wiki[1:]}"
     else:
-        return None
-    parts = [lead]
-    if noun_text and noun_text not in lead:
-        parts.append(noun_text)
-    if noun_dict and noun_dict not in lead:
-        parts.append(noun_dict)
-    return "\n\n".join(parts)
+        combined = f"A {phrase} is a {noun} that is {modifier}."
+    noun_page = _wikipedia_plain_summary(noun)
+    adj_page = _wikipedia_plain_summary(modifier)
+    noun_mean = (
+        "" if _is_disambiguation(noun_page) else _first_sentence(noun_page)
+    ) or _plain_dictionary(noun) or _reverso_line(noun)
+    adj_mean = (
+        "" if _is_disambiguation(adj_page) else _first_sentence(adj_page)
+    ) or _modifier_line(modifier) or _reverso_line(modifier)
+    parts = [
+        combined,
+        f"{noun}: {noun_mean}" if noun_mean else "",
+        f"{modifier}: {adj_mean}" if adj_mean else "",
+    ]
+    return "\n\n".join(part for part in parts if part)
 
 
 def wikipedia_definition(term, question=""):
     """Wikipedia article text, with a plain dictionary line for one word."""
-    pair = described_pair(question)
+    pair = composed_words(question)
     if pair:
         described = _described_definition(*pair)
         if described:
