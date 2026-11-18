@@ -83,13 +83,35 @@ def _reuse_subject(text, focus, conversation=None):
     }:
         when = "tomorrow" if "tomorrow" in lowered else "tonight"
         return f"what is the weather {when} in {place}"
+    if ((focus or {}).get("kind") == "creator" or _about_creator(conversation)) and re.search(r"\b(he|him|his)\b", lowered) and "efatha" not in lowered:
+        if re.fullmatch(r"(?:who is|tell me about|about|and)?\s*(?:he|him)", lowered):
+            return "who is Efatha"
+        rewritten = re.sub(r"\bhis\b", "Efatha's", lowered)
+        return re.sub(r"\b(he|him)\b", "Efatha", rewritten)
     person = (focus or {}).get("person")
     if person and lowered in {"who is that", "and him", "and her", "and them"}:
         return f"who is {person}"
+    if person and (focus or {}).get("kind") == "person" and re.search(r"\b(he|him|his|she|her)\b", lowered):
+        if re.fullmatch(r"(?:who is|tell me about|about|and)?\s*(?:he|she|him|her)", lowered):
+            return f"who is {person}"
+        rewritten = re.sub(r"\b(his|her)\b", f"{person}'s", lowered)
+        return re.sub(r"\b(he|she|him)\b", person, rewritten)
     topic = (focus or {}).get("topic")
     if topic and lowered in {"tell me more", "more", "and that", "what about it"}:
         return f"what is {topic}"
     return None
+
+
+def _about_creator(conversation):
+    """The latest assistant reply is about Efatha, so his and him stay with him."""
+    for item in reversed(conversation or []):
+        if isinstance(item, dict) and item.get("role") not in (None, "assistant"):
+            continue
+        content = str((item.get("content") if isinstance(item, dict) else "") or "").lower()
+        if not content:
+            continue
+        return "efatha" in content
+    return False
 
 
 def _recent_topic(conversation):
@@ -445,6 +467,8 @@ def answer_question(
             }
             if current.get("commons"):
                 result["commons"] = current["commons"]
+            if current.get("person"):
+                result["focus"] = {"person": current["person"], "topic": current["person"], "kind": "person"}
             place = _capital_place(text)
             if place:
                 result["focus"] = {"place": place, "topic": place, "kind": "fact"}
@@ -578,6 +602,26 @@ def _local_knowledge(text, independent, username):
             if word and word in lowered and len(word) > best_length:
                 best = item.get("response")
                 best_length = len(word)
+    leisure = ""
+    for item in knowledge:
+        keys = [str(keyword).lower() for keyword in item.get("keywords") or []]
+        if "efatha leisure" in keys:
+            leisure = item.get("response") or ""
+            break
+    if leisure and (
+        lowered.strip(" ?!.") == leisure.lower()
+        or "bible study" in lowered
+        or "his leisure" in lowered
+        or "spend his leisure" in lowered
+        or re.search(r"\befatha\b", lowered) and re.search(r"\bleisure\b", lowered)
+        or "efatha leisure" in lowered
+        or "efatha free time" in lowered
+    ):
+        best = leisure
+        best_length = len(leisure)
+    lab = _efatha_lab(text)
+    if lab and (not best or best_length == len("efatha")):
+        best = lab
     if not best:
         return None
     result = {
@@ -585,7 +629,8 @@ def _local_knowledge(text, independent, username):
         "source": "knowledge",
         "provider": "data.json",
     }
-    if "efatha" in lowered:
+    if "efatha" in lowered or "efatha" in best.lower():
+        result["focus"] = {"person": "Efatha Rutakaza", "topic": "Efatha Rutakaza", "kind": "creator"}
         result["portrait"] = "/static/images/efatha.jpg"
         result["projects"] = [{
             "name": "e-Chat",
@@ -599,6 +644,42 @@ def _local_knowledge(text, independent, username):
             "What else has Efatha built?",
         ]
     return result
+
+
+def _efatha_lab(text):
+    """A short scientist reply for a question about Efatha that has no saved fact."""
+    lowered = (text or "").lower()
+    about_him = re.search(r"\befatha\b", lowered)
+    about_bot = re.search(r"\b(you|your|yourself)\b", lowered) and re.search(
+        r"\b(llm|model|developed|develop|built|made|trained|creator|language|languages)\b", lowered
+    )
+    if not about_him and not about_bot:
+        return None
+    if re.search(r"\b(llm|model)\b", lowered) or re.search(r"\b(develop\w*|built|made|trained)\b", lowered):
+        return "e-Chat was developed in Python. Efatha is a software engineer with Java expertise as well, but this project does not use Java."
+    if re.search(r"\b(learn|learning)\b", lowered):
+        return "Learn the way he builds: write the working tool in Python, study machine learning by making something small, and keep Java as a separate engineering skill."
+    if re.search(r"\b(advice|advise|advices)\b", lowered) or re.search(r"\blike him\b", lowered):
+        return "His advice is to ship one real project. e-Chat is the Python example. Java is part of his engineering skill, not the language of this app."
+    if re.search(r"\b(passion|passionate)\b", lowered):
+        return "His passion is useful software and mentorship. He builds e-Chat in Python, and he also works as a software engineer in Java."
+    if re.search(r"\b(mentor\w*|teach\w*|teaching)\b", lowered):
+        return "He mentors by showing real work: e-Chat is Python, and Java is another language he can teach from his own engineering experience."
+    if re.search(r"\bmachine learning\b|\bml\b", lowered):
+        return "Machine learning is one of his studies. In e-Chat he keeps the answers tied to sources he can check, and the app itself is Python."
+    if re.search(r"\b(expertise|skills|skill|software engineering|engineer)\b", lowered):
+        return "His expertise is software engineering. e-Chat is written in Python. Java is also part of his skill, along with machine learning, mentorship, and web development."
+    if re.search(r"\bpython\b", lowered) and re.search(r"\bjava\b", lowered):
+        return "e-Chat is a Python project. Java is Efatha's other engineering language, not a language used in this codebase."
+    if re.search(r"\bpython\b", lowered):
+        return "Python is the language of e-Chat. Efatha uses it to build and test this assistant."
+    if re.search(r"\bjava\b", lowered):
+        return "Java is part of Efatha's software-engineering expertise. It is not used in this e-Chat project, which is Python."
+    if re.search(r"\b(language|languages|programming|code)\b", lowered):
+        return "e-Chat is programmed in Python. Efatha also has Java expertise, plus web development and machine learning."
+    if re.search(r"\b(world|lab|scientist|science)\b", lowered):
+        return "Efatha builds like a scientist: he tests an idea and keeps what works. e-Chat is the Python result. Java is another language in his engineering work."
+    return None
 
 
 def _yes_no_reply(text, history, conversation, username):

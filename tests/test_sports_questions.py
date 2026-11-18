@@ -69,6 +69,24 @@ class SportsQuestionTests(unittest.TestCase):
         self.assertTrue(sports_agent._names_in(["mali"], {"home": "Mali", "away": "Chad"}))
         self.assertTrue(sports_agent._names_in(["somalia"], {"home": "Somalia", "away": "Ghana"}))
 
+
+class PersonFollowUpTests(unittest.TestCase):
+    def test_pronouns_stay_on_the_last_public_figure(self):
+        from agents.router import _reuse_subject
+
+        focus = {"person": "Elon Musk", "kind": "person"}
+        self.assertEqual(_reuse_subject("what does he do?", focus), "what does Elon Musk do")
+        self.assertEqual(_reuse_subject("what is his origin?", focus), "what is Elon Musk's origin")
+        self.assertEqual(_reuse_subject("what is his company?", focus), "what is Elon Musk's company")
+        self.assertEqual(_reuse_subject("who is his wife?", focus), "who is Elon Musk's wife")
+        self.assertEqual(_reuse_subject("tell me about him", focus), "who is Elon Musk")
+        creator = [{"role": "assistant", "content": "Efatha's world runs on two languages."}]
+        self.assertEqual(
+            _reuse_subject("what is his expertise?", focus, creator),
+            "what is Efatha's expertise",
+        )
+        self.assertIsNone(_reuse_subject("what does he do?", {"person": "Elon Musk", "kind": "sport"}))
+
     def test_final_score_today_uses_the_parsed_team_and_day(self):
         def fake_events(url):
             self.assertIn("soccer/", url)

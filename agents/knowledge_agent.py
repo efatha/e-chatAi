@@ -296,13 +296,25 @@ _WHEN_PROPS = (
 
 def wikidata_research(message):
     """Who and when questions, answered from the public record for that topic."""
+    about = person_fact(message)
+    if about:
+        return about
     text = _normalize_question(message)
+    told = re.match(r"^(?:please\s+)?(?:tell me about|about)\s+(.+?)\s*[?.!]*$", text, re.IGNORECASE)
+    if told:
+        item = _wikidata_item(_clean_term(told.group(1)), "human")
+        if item and _is_human(item):
+            return _person_answer(item)
     won = _WIN.match(text)
     if won:
         found = _research_win(_clean_term(won.group(1)), _clean_term(won.group(2)))
         return found or _never_won_reply(_clean_term(won.group(1)), _clean_term(won.group(2)))
     who = _WHO.match(text)
     if who:
+        if re.match(r"^who\s+(?:is|was)\b", text, re.IGNORECASE):
+            item = _wikidata_item(_clean_term(who.group(1)), "human")
+            if item and _is_human(item):
+                return _person_answer(item)
         found = _research_who(who.group(1), text)
         if not found and re.match(r"^who\s+(?:is|was)\b", text, re.IGNORECASE):
             found = _wiki_who(who.group(1))
@@ -448,7 +460,7 @@ def _wiki_who(rest):
             continue
         item = _wikidata_from_title(title)
         photo = _commons_file(_claim_filename(item, "P18")) if item else None
-        result = {"text": sentence + "."}
+        result = {"text": sentence + ".", "person": title}
         if photo:
             result["commons"] = photo
         return result
@@ -828,20 +840,289 @@ def _research_topic(rest):
     return _clean_term(text)
 
 
+_PEOPLE = {}
+
+
+def _remember_person(asked, item):
+    stamp = datetime.now(timezone.utc).timestamp()
+    for name in (asked, _label(item)):
+        if name:
+            _PEOPLE[name.lower()] = (stamp, item)
+
+
+def _cached_person(name):
+    hit = _PEOPLE.get((name or "").lower())
+    if hit and datetime.now(timezone.utc).timestamp() - hit[0] < 600:
+        return hit[1]
+    return None
+
+
+def _public_brief(name):
+    """The first two public sentences about a person, with an empty pronunciation removed."""
+    sentences = [part.strip() for part in re.split(r"(?<=[.])\s+", _wiki_extract(name)) if part.strip()]
+    intro = re.sub(r"\(\s*;[^)]*\)", "", " ".join(sentences[:2]))
+    intro = re.sub(r"\s{2,}", " ", intro).strip()
+    if intro and len(intro) > 80 and name.split()[-1].lower() in intro.lower():
+        return intro if intro.endswith(".") else intro + "."
+    return ""
+
+
 def _person_answer(item):
     name = _label(item)
     detail = _description(item)
-    if detail:
-        sentence = random.choice((
-            f"{name} is {detail}.",
-            f"{detail[:1].upper()}{detail[1:]}: {name}.",
-        ))
+    brief = _public_brief(name)
+    if brief:
+        sentence = brief
+    elif detail:
+        sentence = f"{name} is {detail}."
     else:
         sentence = name + "."
+    _remember_person(name, item)
     return {
         "text": sentence,
         "commons": _commons_file(_claim_filename(item, "P18")),
+        "person": name,
     }
+
+
+_PERSON_ASPECTS = (
+    (r"\b(do|does|did|job|jobs|work|works|working|occupation|occupations)\b", "work"),
+    (r"\b(origin|from|born|birth|birthplace|nationality|citizen|citizenship)\b", "origin"),
+    (r"\b(family|wife|husband|spouse|child|children|kids|parents|father|mother)\b", "family"),
+    (r"\b(joke|jokes|funny|humou?r|comedian|comedy)\b", "joke"),
+)
+
+
+_DETAIL_FIELDS = {
+    "wife": ("P26", "wife"),
+    "husband": ("P26", "husband"),
+    "spouse": ("P26", "spouse"),
+    "child": ("P40", "child"),
+    "children": ("P40", "children"),
+    "son": ("P40", "son"),
+    "daughter": ("P40", "daughter"),
+    "father": ("P22", "father"),
+    "dad": ("P22", "father"),
+    "mother": ("P25", "mother"),
+    "mum": ("P25", "mother"),
+    "mom": ("P25", "mother"),
+    "company": ("P108", "company"),
+    "companies": ("P108", "company"),
+    "employer": ("P108", "employer"),
+    "business": ("P108", "business"),
+    "education": ("P69", "education"),
+    "school": ("P69", "school"),
+    "university": ("P69", "university"),
+    "college": ("P69", "college"),
+    "award": ("P166", "award"),
+    "awards": ("P166", "awards"),
+    "religion": ("P140", "religion"),
+    "language": ("P1412", "language"),
+    "languages": ("P1412", "languages"),
+    "sibling": ("P3373", "sibling"),
+    "brother": ("P3373", "brother"),
+    "sister": ("P3373", "sister"),
+    "net worth": ("P2218", "net worth"),
+}
+
+
+def _detail_request(text):
+    """A what, how, where, when, or who question about one or two fields of a person."""
+    if not re.search(r"\b(what|how|where|when|who)\b", text or "", re.IGNORECASE):
+        return "", ""
+    if re.search(r"\bhow old\b", text or "", re.IGNORECASE):
+        person = _named_person(re.sub(r"\b(how|old)\b", " ", text, flags=re.IGNORECASE))
+        return person, "age"
+    owned = re.search(r"['’]s\s+([a-z]+(?:\s+[a-z]+)?)\s*$", text or "", re.IGNORECASE)
+    if not owned:
+        return "", ""
+    before = (text or "")[:owned.start()]
+    words = re.findall(r"[A-Za-z][A-Za-z'.-]*", before)
+    skip = {"what", "how", "where", "when", "who", "is", "was", "are", "were", "the", "a", "an", "of", "does", "do", "did"}
+    while words and words[0].lower() in skip:
+        words.pop(0)
+    if not words:
+        return "", ""
+    return " ".join(words[:4]), owned.group(1).lower().strip()
+
+
+def _field_fact(item, name, field):
+    if field in {"job", "jobs", "work", "occupation", "occupations"}:
+        return _work_fact(item, name)
+    if field in {"birthplace", "birth place"}:
+        born = _claim_labels(item, "P19", 1)
+        if not born:
+            return {"text": f"I couldn't find a public birthplace for {name}, so I won't invent one."}
+        return {"text": f"{name} was born in {born[0]}."}
+    if field in {"origin", "nationality", "citizenship", "country"}:
+        return _origin_fact(item, name)
+    if field in {"family", "parents"}:
+        return _family_fact(item, name)
+    if field in {"joke", "jokes"}:
+        return _joke_fact(item, name)
+    if field == "age":
+        year = _birth_year(item)
+        if not year:
+            return {"text": f"I couldn't find a public birth date for {name}, so I won't invent an age."}
+        age = date.today().year - year
+        return {"text": f"{name} was born in {year}, so the public age this year is {age}."}
+    if field in {"birthday", "birth date", "date of birth"}:
+        when = _claim_times(item, "P569")
+        if not when:
+            return {"text": f"I couldn't find a public birth date for {name}, so I won't invent one."}
+        return {"text": f"{name} was born on {when[0]}."}
+    mapped = _DETAIL_FIELDS.get(field)
+    if mapped:
+        prop, label = mapped
+        if prop == "P2218":
+            amount = _claim_amount(item, prop)
+            if not amount:
+                return {"text": f"I couldn't find a public net worth for {name}, so I won't invent one."}
+            return {"text": f"The public record lists {name}'s net worth as {amount}."}
+        found = _claim_labels(item, prop, 4)
+        if field == "company":
+            owned = [
+                label for label in _claim_labels(item, "P1830", 6)
+                if "roadster" not in label.lower() and "car" not in label.lower()
+            ]
+            found = list(dict.fromkeys(found + owned))
+        if found:
+            return {"text": f"{name}'s {label}: {_join_names(found[:6])}."}
+        return {"text": f"I couldn't find a public record of {name}'s {label}, so I won't invent one."}
+    for sentence in re.split(r"(?<=[.])\s+", _wiki_extract(name)):
+        if re.search(rf"\b{re.escape(field)}\b", sentence, re.IGNORECASE):
+            return {"text": re.sub(r"\s{2,}", " ", sentence).strip()}
+    return {"text": f"I couldn't find a public record of {name}'s {field}, so I won't invent one."}
+
+
+def _birth_year(item):
+    for claim in ((item.get("claims") or {}).get("P569") or []):
+        value = ((claim.get("mainsnak") or {}).get("datavalue") or {}).get("value") or {}
+        match = re.match(r"\+?(\d{4})", str(value.get("time") or ""))
+        if match:
+            return int(match.group(1))
+    return None
+
+
+def _claim_amount(entity, prop):
+    for claim in ((entity.get("claims") or {}).get(prop) or []):
+        if claim.get("rank") == "deprecated":
+            continue
+        value = ((claim.get("mainsnak") or {}).get("datavalue") or {}).get("value") or {}
+        amount = value.get("amount") if isinstance(value, dict) else None
+        if amount in (None, ""):
+            continue
+        try:
+            number = int(float(amount))
+        except (TypeError, ValueError):
+            continue
+        return f"{number:,}"
+    return ""
+
+
+def person_fact(message):
+    """A public job, origin, family, or comedy fact about a named person."""
+    text = _normalize_question(message)
+    person, field = _detail_request(text)
+    if person and field:
+        item = _cached_person(person) or _wikidata_item(person, "human")
+        if item and _is_human(item):
+            _remember_person(person, item)
+            reply = _field_fact(item, _label(item), field)
+            reply["person"] = _label(item)
+            return reply
+    aspect = next((name for pattern, name in _PERSON_ASPECTS if re.search(pattern, text, re.IGNORECASE)), "")
+    if not aspect:
+        return None
+    person = _named_person(text)
+    if not person:
+        return None
+    item = _cached_person(person) or _wikidata_item(person, "human")
+    if not item or not _is_human(item):
+        return None
+    _remember_person(person, item)
+    name = _label(item)
+    if aspect == "work":
+        reply = _work_fact(item, name)
+    elif aspect == "origin":
+        reply = _origin_fact(item, name)
+    elif aspect == "family":
+        reply = _family_fact(item, name)
+    else:
+        reply = _joke_fact(item, name)
+    reply["person"] = name
+    return reply
+
+
+def _named_person(text):
+    cleaned = re.sub(
+        r"\b(what|who|where|when|does|do|did|is|was|are|were|his|her|him|he|she|the|a|an|of|about|tell|me|please|job|jobs|work|works|working|occupation|occupations|origin|from|born|birth|birthplace|nationality|citizen|citizenship|family|wife|husband|spouse|child|children|kids|parents|father|mother|joke|jokes|funny|humour|humor|comedian|comedy)\b",
+        " ",
+        text,
+        flags=re.IGNORECASE,
+    )
+    words = re.findall(r"[A-Za-z][A-Za-z'.-]*", cleaned)
+    if not words:
+        return ""
+    return " ".join(words[:4])
+
+
+def _work_fact(item, name):
+    intro = _public_brief(name)
+    jobs = _claim_labels(item, "P106", 4)
+    fields = _claim_labels(item, "P101", 4)
+    posts = (_claim_labels(item, "P108", 4) + _claim_labels(item, "P39", 4))[:6]
+    lines = []
+    if jobs:
+        lines.append(f"{name} works as {_join_names(jobs[:4])}.")
+    if intro and len(intro) > 80 and name.split()[-1].lower() in intro.lower():
+        lines.append(intro if intro.endswith(".") else intro + ".")
+    elif _description(item):
+        lines.append(f"{name} is {_description(item)}.")
+    if fields:
+        lines.append(f"Public records also list this work: {_join_names(fields[:4])}.")
+    if posts:
+        lines.append("Known posts and organizations:")
+        lines.extend(f"{index}. {post}" for index, post in enumerate(posts, start=1))
+    if not lines:
+        lines.append(f"I couldn't find a public record of what {name} does, so I won't invent a job.")
+    return {"text": "\n".join(lines)}
+
+
+def _origin_fact(item, name):
+    citizen = _claim_labels(item, "P27")
+    born = _claim_labels(item, "P19")
+    when = _claim_times(item, "P569")
+    lines = []
+    if citizen:
+        lines.append(f"{name} is a citizen of {_join_names(citizen)}.")
+    if born or when:
+        place = f"in {born[0]}" if born else ""
+        date = f"on {when[0]}" if when else ""
+        lines.append(" ".join(part for part in (f"{name} was born", place, date) if part).strip() + ".")
+    if not lines:
+        lines.append(f"I couldn't find a public record of {name}'s origin, so I won't invent one.")
+    return {"text": " ".join(lines)}
+
+
+def _family_fact(item, name):
+    rows = (
+        ("Spouse", _claim_labels(item, "P26", 3)),
+        ("Children", _claim_labels(item, "P40", 4)),
+        ("Father", _claim_labels(item, "P22", 2)),
+        ("Mother", _claim_labels(item, "P25", 2)),
+    )
+    lines = [f"{label}: {_join_names(names[:4])}" for label, names in rows if names]
+    if not lines:
+        return {"text": f"I couldn't find a public family record for {name}, so I won't invent one."}
+    return {"text": f"Public family record for {name}:\n" + "\n".join(lines)}
+
+
+def _joke_fact(item, name):
+    jobs = [job.lower() for job in _claim_labels(item, "P106")]
+    if any("comed" in job or "humor" in job or "humour" in job for job in jobs):
+        return {"text": f"{name} is publicly listed as {_join_names(_claim_labels(item, 'P106')[:3])}."}
+    return {"text": f"I couldn't find a public comedy or joke record for {name}, so I won't invent one."}
 
 
 def _is_human(entity):
@@ -858,14 +1139,14 @@ def _description(entity):
     return ((entity.get("descriptions") or {}).get("en") or {}).get("value") or ""
 
 
-def _claim_people(entity, prop):
+def _claim_people(entity, prop, limit=None):
     people = []
     seen = set()
     if not entity:
         return people
-    for claim in (entity.get("claims") or {}).get(prop) or []:
-        if claim.get("rank") == "deprecated":
-            continue
+    claims = [claim for claim in (entity.get("claims") or {}).get(prop) or [] if claim.get("rank") != "deprecated"]
+    claims.sort(key=lambda claim: claim.get("rank") != "preferred")
+    for claim in claims:
         value = ((claim.get("mainsnak") or {}).get("datavalue") or {}).get("value") or {}
         item_id = value.get("id") if isinstance(value, dict) else None
         if not item_id or item_id in seen:
@@ -876,11 +1157,13 @@ def _claim_people(entity, prop):
             continue
         seen.add(item_id)
         people.append({"name": named, "entity": person})
+        if limit and len(people) >= limit:
+            break
     return people
 
 
-def _claim_labels(entity, prop):
-    return [person["name"] for person in _claim_people(entity, prop)]
+def _claim_labels(entity, prop, limit=None):
+    return [person["name"] for person in _claim_people(entity, prop, limit)]
 
 
 def _claim_times(entity, prop):
