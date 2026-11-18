@@ -1885,10 +1885,51 @@ def google_image_url(phrase):
     return "https://www.google.com/search?udm=2&q=" + requests.utils.quote(phrase)
 
 
+def _image_card(phrase, thumb, page):
+    return {
+        "thumbnail": thumb,
+        "page": page,
+        "title": phrase,
+        "creator": "illustrative image",
+        "license": "e-chat",
+    }
+
+
+def _bing_image_thumbs(phrase, limit):
+    """Thumbnails from the same picture search, on a host the chat can load."""
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+        ),
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+    try:
+        page = requests.get(
+            "https://www.bing.com/images/search",
+            params={"q": phrase, "form": "HDRSC2"},
+            headers=headers,
+            timeout=12,
+        )
+        page.raise_for_status()
+    except requests.RequestException:
+        return []
+    thumbs = []
+    for match in re.finditer(r'turl&quot;:&quot;(https://[^&"\\]+)', page.text):
+        thumb = match.group(1).replace("\\u0026", "&")
+        host = (requests.compat.urlparse(thumb).hostname or "").lower()
+        if host.endswith(".mm.bing.net") and thumb not in thumbs:
+            thumbs.append(thumb)
+        if len(thumbs) >= limit:
+            break
+    return thumbs
+
+
 def google_images(phrase, limit=3):
-    """Pictures for a phrase, shown in the chat."""
+    """Pictures for a phrase, shown in the chat. The caption still opens Google Images."""
     page = google_image_url(phrase)
     headers = {"User-Agent": "Mozilla/5.0", "Accept-Language": "en"}
+    results = []
     try:
         home = requests.get(
             "https://duckduckgo.com/",
@@ -1901,29 +1942,28 @@ def google_images(phrase, limit=3):
             if part[:1] in "\"'":
                 token = part[1:].split(part[0], 1)[0]
                 break
-        if not token:
-            return []
-        images = requests.get(
-            "https://duckduckgo.com/i.js",
-            params={"q": phrase, "vqd": token, "o": "json", "l": "us-en", "p": "1"},
-            headers=headers,
-            timeout=12,
-        )
-        results = (images.json() or {}).get("results") or []
+        if token:
+            images = requests.get(
+                "https://duckduckgo.com/i.js",
+                params={"q": phrase, "vqd": token, "o": "json", "l": "us-en", "p": "1"},
+                headers={**headers, "Referer": "https://duckduckgo.com/"},
+                timeout=12,
+            )
+            if images.ok and images.headers.get("content-type", "").startswith("application/json"):
+                results = (images.json() or {}).get("results") or []
     except (requests.RequestException, ValueError):
-        return []
+        results = []
     found = []
     for item in results:
         thumb = item.get("thumbnail") or ""
         if not thumb.startswith("https://") or thumb in {photo["thumbnail"] for photo in found}:
             continue
-        found.append({
-            "thumbnail": thumb,
-            "page": page,
-            "title": phrase,
-            "creator": "illustrative image",
-            "license": "e-chat",
-        })
+        found.append(_image_card(phrase, thumb, page))
+        if len(found) >= limit:
+            return found
+    for thumb in _bing_image_thumbs(phrase, limit):
+        if thumb not in {photo["thumbnail"] for photo in found}:
+            found.append(_image_card(phrase, thumb, page))
         if len(found) >= limit:
             break
     return found
