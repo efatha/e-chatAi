@@ -1895,8 +1895,23 @@ def _image_card(phrase, thumb, page):
     }
 
 
+def _picture_phrase(phrase):
+    """'what is a fertilized soil?' -> 'fertilized soil'."""
+    cleaned = re.sub(r"\s+", " ", (phrase or "").strip())
+    cleaned = re.sub(
+        r"^(?:what(?:'s| is)\s+)?(?:a|an|the)\s+",
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+    return cleaned.strip(" ?.!")
+
+
 def _pexels_thumbs(phrase, limit):
     """Pictures from a Pexels search, sized for the chat."""
+    phrase = _picture_phrase(phrase)
+    if not phrase:
+        return []
     headers = {
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -1906,7 +1921,8 @@ def _pexels_thumbs(phrase, limit):
     }
     try:
         page = requests.get(
-            "https://www.pexels.com/search/" + requests.utils.quote(phrase) + "/",
+            "https://www.pexels.com/search/",
+            params={"q": phrase},
             headers=headers,
             timeout=12,
         )
