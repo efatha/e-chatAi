@@ -29,6 +29,8 @@ from agents.knowledge_agent import (
     translate_reply,
     weather_reply,
     conditions_reply,
+    botany_reply,
+    science_images,
     wikipedia_definition,
     wikipedia_summary,
 )
@@ -435,6 +437,9 @@ def answer_question(
             if patterned:
                 patterned["response"] = _with_name(patterned["response"], username)
                 return patterned
+            explained = _botany_result(text, username)
+            if explained:
+                return explained
             fallback = _with_name(
                 "I couldn’t find reliable source information for both sides of that "
                 "comparison, so I can’t compare them accurately.",
@@ -508,6 +513,15 @@ def answer_question(
                 "provider": "commons",
             }
 
+    if text and not has_file and re.search(
+        r"\b(root|roots|seed|seeds|germinat\w*|soil|fertil\w*|plant|plants|seedling|botany)\b",
+        text,
+        re.I,
+    ):
+        explained = _botany_result(text, username)
+        if explained:
+            return explained
+
     if text and not has_file and _book_first(text):
         from_books = book_agent().answer(text)
         if from_books:
@@ -517,16 +531,23 @@ def answer_question(
     if text and not has_file:
         reasoned = why_reply(text)
         if reasoned:
-            return {
+            result = {
                 "response": _with_name(reasoned, username),
                 "source": "knowledge",
                 "provider": "duckduckgo",
             }
+            photos = science_images(text)
+            if photos:
+                result["commons"] = photos
+            return result
 
     if text and not has_file and (composed_words(text) or detect_lookup(text)):
         defined = _definition_from_local_or_wikipedia(text, independent, username)
         if defined:
             return defined
+        explained = _botany_result(text, username)
+        if explained:
+            return explained
         return {
             "response": _with_name(
                 "I couldn't confirm that from the public sources.",
@@ -556,6 +577,9 @@ def answer_question(
             }
 
     if text and not has_file:
+        explained = _botany_result(text, username)
+        if explained:
+            return explained
         listed = conditions_reply(text)
         if listed:
             result = {
@@ -813,6 +837,20 @@ def passages_source(reply):
     if not match:
         return ""
     return f"Source: {match.group(1)}, p. {match.group(2)}."
+
+
+def _botany_result(text, username):
+    found = botany_reply(text)
+    if not found:
+        return None
+    result = {
+        "response": _with_name(found["text"], username),
+        "source": "knowledge",
+        "provider": "duckduckgo",
+    }
+    if found.get("images"):
+        result["commons"] = found["images"]
+    return result
 
 
 def _with_name(text, username):

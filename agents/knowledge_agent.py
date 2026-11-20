@@ -4504,6 +4504,126 @@ def looks_like_open_question(text):
     return any(mark in lowered for mark in marks)
 
 
+def _short_definition(text):
+    """'what is the seed' and 'what is a good seed' stay on the definition path."""
+    match = re.match(r"^what(?:'s| is)\s+(.+?)\s*[?.!]*$", text or "", re.I)
+    if not match:
+        return False
+    words = match.group(1).split()
+    if words and words[0].lower() in {"a", "an", "the"}:
+        words = words[1:]
+    return 1 <= len(words) <= 2
+
+
+def science_images(text):
+    """Pictures for a longer science question, not for a one-word or two-word definition."""
+    if _short_definition(text):
+        return []
+    phrase = ""
+    named = re.search(
+        r"\b(fertilized soil|fertile soil|seed germination|plant roots)\b",
+        text or "",
+        re.I,
+    )
+    if named:
+        phrase = named.group(1)
+    else:
+        nouns = re.findall(
+            r"\b(germination|roots|root|seeds|seed|soil|plants|plant|sunlight|water)\b",
+            text or "",
+            re.I,
+        )
+        phrase = nouns[-1] if nouns else ""
+    if not phrase:
+        return []
+    if len(phrase.split()) >= 2:
+        return google_images(phrase, 3)
+    return commons_images(phrase, 3)
+
+
+def botany_reply(message):
+    """Science and botany questions use the same public snippets as a why question."""
+    text = re.sub(r"\s+", " ", (message or "")).strip()
+    if not text or re.match(r"^why\b", text, re.I) or _short_definition(text):
+        return None
+    if not re.search(
+        r"\b(root|roots|seed|seeds|germinat\w*|soil|fertil\w*|plant|plants|seedling|"
+        r"leaf|leaves|photosynthesis|sunlight|farmer|botany|water)\b",
+        text,
+        re.I,
+    ):
+        return None
+    if not re.search(r"\b(what|how|why|when|which|difference|compare|conditions|function|types|happen|test|observe)\b", text, re.I):
+        return None
+    facts = []
+    for note in _duckduckgo_snippets(text) or []:
+        spoken = _spoken_note(note) or note.strip()
+        if spoken and spoken not in facts:
+            facts.append(spoken)
+    lines = []
+    if facts:
+        lines.append(" ".join(facts[:2]))
+    paragraph = _libretexts_paragraph(text)
+    if paragraph:
+        lines.append(paragraph)
+    if not lines:
+        return None
+    return {"text": "\n\n".join(lines), "images": science_images(text)}
+
+
+def _libretexts_paragraph(question):
+    """One LibreTexts paragraph when at least 60% of the question words appear in it."""
+    headers = {"User-Agent": "Mozilla/5.0", "Accept-Language": "en"}
+    links = []
+    try:
+        search = requests.get(
+            "https://bio.libretexts.org/Special:Search",
+            params={"type": "wiki", "query": question},
+            headers=headers,
+            timeout=12,
+        )
+        if search.ok:
+            for href in re.findall(r'href="(https://bio\.libretexts\.org/[^"]+)"', search.text):
+                if "/Bookshelves/" in href or "/Courses/" in href:
+                    links.append(href.split("?")[0])
+    except requests.RequestException:
+        pass
+    try:
+        found = requests.post(
+            "https://html.duckduckgo.com/html/",
+            data={"q": f"{question} site:bio.libretexts.org"},
+            headers=headers,
+            timeout=12,
+        )
+        if found.ok and "challenge-form" not in found.text:
+            for href in re.findall(r'href="(https://bio\.libretexts\.org/[^"&]+)"', found.text):
+                if href not in links and "Special:" not in href:
+                    links.append(href.split("?")[0])
+    except requests.RequestException:
+        pass
+    wanted = set(_content_words(question))
+    if not wanted:
+        return None
+    for url in links[:3]:
+        try:
+            page = requests.get(url, headers=headers, timeout=12)
+            if not page.ok:
+                continue
+        except requests.RequestException:
+            continue
+        text = re.sub(r"<[^>]+>", " ", page.text)
+        text = re.sub(r"\s+", " ", html.unescape(text))
+        for paragraph in re.split(r"\s{2,}|(?<=\.)\s+(?=[A-Z])", text):
+            paragraph = paragraph.strip()
+            if len(paragraph) < 80 or len(paragraph) > 500:
+                continue
+            shared = wanted & set(_content_words(paragraph))
+            if len(shared) / len(wanted) < 0.6:
+                continue
+            return paragraph + f"\n\nSource: [bio.libretexts.org]({url})"
+    return None
+
+
 def search_result_text(question):
     """Retrieve public snippets and retain only those matching the question."""
     query = re.sub(r"\s+", " ", (question or "")).strip()
