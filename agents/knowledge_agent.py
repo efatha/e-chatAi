@@ -4516,29 +4516,79 @@ def _short_definition(text):
 
 
 def science_images(text):
-    """Pictures for a longer science question, not for a one-word or two-word definition."""
+    """Pictures whose file names match the scientific subject of the question."""
     if _short_definition(text):
         return []
-    phrase = ""
-    named = re.search(
-        r"\b(fertilized soil|fertile soil|seed germination|plant roots)\b",
-        text or "",
-        re.I,
-    )
-    if named:
-        phrase = named.group(1)
-    else:
-        nouns = re.findall(
-            r"\b(germination|roots|root|seeds|seed|soil|plants|plant|sunlight|water)\b",
-            text or "",
-            re.I,
-        )
-        phrase = nouns[-1] if nouns else ""
-    if not phrase:
+    tokens = re.findall(r"[A-Za-z']+", (text or "").lower())
+    picked = []
+    for token in tokens:
+        if token in {"soil", "seed", "seeds", "root", "roots", "plant", "plants", "water", "sunlight", "seedling", "leaf", "leaves"} or token.startswith(("germinat", "fertil")):
+            if token not in picked:
+                picked.append(token)
+    if not picked:
         return []
-    if len(phrase.split()) >= 2:
-        return google_images(phrase, 3)
-    return commons_images(phrase, 3)
+    if "soil" in picked and any(token.startswith("fertil") for token in picked):
+        subject = "soil fertility"
+    else:
+        subject = " ".join(picked[:3])
+    must = [token[:6] for token in picked]
+    return _matching_commons(subject, must, 3)
+
+
+def _matching_commons(subject, must, limit):
+    """Keep a Commons file only when its title names the scientific subject."""
+    try:
+        response = requests.get(
+            "https://commons.wikimedia.org/w/api.php",
+            params={
+                "action": "query",
+                "format": "json",
+                "generator": "search",
+                "gsrsearch": subject,
+                "gsrnamespace": 6,
+                "gsrlimit": 20,
+                "prop": "imageinfo",
+                "iiprop": "url|extmetadata|mime",
+                "iiurlwidth": 640,
+            },
+            headers={"User-Agent": WIKI_USER_AGENT},
+            timeout=16,
+        )
+        response.raise_for_status()
+        pages = (response.json().get("query") or {}).get("pages") or {}
+    except (requests.RequestException, ValueError):
+        return []
+    photos = []
+    for page in pages.values():
+        info = (page.get("imageinfo") or [None])[0] or {}
+        mime = (info.get("mime") or "").lower()
+        thumb = info.get("thumburl") or ""
+        title = (page.get("title") or "").replace("File:", "")
+        lowered = title.lower()
+        if mime not in {"image/jpeg", "image/png", "image/webp"} or not thumb:
+            continue
+        if not any(stem in lowered for stem in must):
+            continue
+        if re.search(
+            r"\b(bike|bicycle|church|kirche|door|jump|logo|icon|map|flag|house|geograph|sculpture|artwork)\b",
+            lowered,
+        ):
+            continue
+        if "germin" in must and "seed" not in lowered and "germinat" not in lowered:
+            continue
+        meta = info.get("extmetadata") or {}
+        slug = "File:" + title
+        photos.append({
+            "thumbnail": thumb,
+            "page": "https://commons.wikimedia.org/wiki/" + requests.utils.quote(slug.replace(" ", "_")),
+            "title": title,
+            "creator": _meta_text(meta, "Artist") or "Unknown creator",
+            "license": _meta_text(meta, "LicenseShortName") or "See the Commons page",
+            "license_url": _meta_text(meta, "LicenseUrl"),
+        })
+        if len(photos) >= limit:
+            break
+    return photos
 
 
 def botany_reply(message):
