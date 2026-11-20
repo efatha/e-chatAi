@@ -517,6 +517,11 @@ def _playing_answer(text, focus):
     else:
         return None
     found = _next_fixture(team_name)
+    player = None
+    if not found:
+        player = _espn_player(team_name)
+        if player:
+            found = _next_fixture(player[1])
     if not found:
         return {"text": f"I couldn't find {team_name} on the free football schedule, so I won't say whether they play {when}."}
     event, team = found
@@ -526,15 +531,18 @@ def _playing_answer(text, focus):
     news = _matching_news(event, team)
     if event.get("date") == target.isoformat():
         answer = _event_line(event)
-        if named:
+        if player:
+            answer = f"Yes. {player[0]} is listed with {team['name']}. {answer} That is the club fixture. I don't have a confirmed lineup, so I won't say that player starts."
+        elif named:
             answer = f"Yes. {answer}"
     else:
         clock = f" at {event['time']}" if event.get("time") else ""
         local = f" ({event['local']})" if event.get("local") else ""
         league = f", {event['league']}" if event.get("league") else ""
         venue = f", {event['venue']}" if event.get("venue") else ""
+        who = f"{player[0]}'s club, {team['name']}," if player else team["name"]
         answer = (
-            f"No. {team['name']} is not listed to play {when} ({target.isoformat()}, Africa/Kampala). "
+            f"No. {who} is not listed to play {when} ({target.isoformat()}, Africa/Kampala). "
             f"Their next match is {event['title']} on {event['date']}{clock}{local}{league}{venue}."
         )
     if news:
@@ -2328,6 +2336,29 @@ def _sides(title):
     if len(parts) == 2:
         return parts[0].strip(), parts[1].strip()
     return title, "the opponent"
+
+
+def _espn_player(name):
+    """(display name, club) for a footballer, from the free ESPN player search."""
+    try:
+        found = requests.get(
+            "https://site.web.api.espn.com/apis/common/v3/search",
+            params={"query": name, "limit": 5, "type": "player"},
+            headers=_HEADERS,
+            timeout=12,
+        )
+        found.raise_for_status()
+        items = [item for item in (found.json().get("items") or []) if item.get("sport") == "soccer"]
+    except (requests.RequestException, ValueError):
+        return None
+    wanted = _plain(name)
+    items.sort(key=lambda item: 0 if wanted in _plain(item.get("displayName") or "") else 1)
+    for item in items:
+        for link in item.get("teamRelationships") or []:
+            club = ((link.get("core") or {}).get("displayName") or "").strip()
+            if club:
+                return item.get("displayName") or name, club
+    return None
 
 
 def _next_fixture(name):
