@@ -141,7 +141,7 @@ def sports_reply(message, focus=None, conversation=None):
     playing = _playing_answer(text, focus)
     if playing:
         return playing
-    if re.search(r"\b(today|live|tomorrow|this week|this month)\b", text, re.IGNORECASE) and re.search(
+    if re.search(r"\b(today|live|tomorrow|this week|this month|top|best|popular)\b", text, re.IGNORECASE) and re.search(
         r"\b(match|matches|game|games|fixture|fixtures|live|afcon|playing)\b", text, re.IGNORECASE
     ):
         return _day_answer(text)
@@ -665,19 +665,64 @@ def _competition_board(text):
         return None
     today = datetime.now(_KAMPALA).date()
     day = today + timedelta(days=1) if _asked_day(text, today)[1] == "tomorrow" else today
-    events = _espn_scoreboard("uefa.nations", day) + _espn_scoreboard("caf.nations_qual", day)
-    chosen = _headline_events(events)
+    chosen = _popular_fixtures(day)
     if not chosen:
-        return None
+        return {
+            "text": (
+                f"No fixture on {day.isoformat()} (Africa/Kampala) is in a major league "
+                "or involves a top-ranked national team. I won't present a smaller league as a top match."
+            )
+        }
     lines = _as_list([_board_line(item) for item in chosen])
     return {
         "text": (
-            f"Headline matches for {day.isoformat()} (Africa/Kampala):\n"
+            f"Top matches for {day.isoformat()} (Africa/Kampala):\n"
             + "\n".join(lines)
             + "\n\nSource: [ESPN soccer](https://www.espn.com/soccer/), retrieved for this answer."
         ),
-        "card": _match_card(f"Headline matches, {day.isoformat()}", chosen),
+        "card": _match_card(f"Top matches, {day.isoformat()}", chosen),
     }
+
+
+_POPULAR_LEAGUES = (
+    ("uefa.champions", "UEFA Champions League", 300),
+    ("eng.1", "English Premier League", 220),
+    ("esp.1", "La Liga", 220),
+    ("ger.1", "Bundesliga", 220),
+    ("ita.1", "Serie A", 210),
+    ("fra.1", "Ligue 1", 200),
+    ("uefa.europa", "UEFA Europa League", 160),
+    ("uefa.nations", "UEFA Nations League", 150),
+    ("caf.nations_qual", "Africa Cup of Nations qualifying", 140),
+)
+
+
+def _popular_fixtures(day):
+    """Major-league and highly ranked fixtures on one date, strongest first."""
+    ranks = _country_ranks()
+    found = []
+    for slug, label, base in _POPULAR_LEAGUES:
+        for item in _espn_scoreboard(slug, day):
+            item = dict(item)
+            item["league"] = label
+            item["weight"] = base + _side_weight(item.get("title") or "", ranks)
+            found.append(item)
+    found.sort(key=lambda item: item["weight"], reverse=True)
+    return found[:5]
+
+
+def _side_weight(title, ranks):
+    lowered = title.lower()
+    weight = 0
+    if any(re.search(rf"\b{re.escape(club)}\b", lowered) for club in _MAJOR_CLUBS):
+        weight += 80
+    best = None
+    for country, rank in ranks.items():
+        if re.search(rf"\b{re.escape(country)}\b", lowered) and (best is None or rank < best):
+            best = rank
+    if best is not None and best <= 30:
+        weight += 120 - best
+    return weight
 
 
 def _headline_events(events):
@@ -787,7 +832,9 @@ def _board_line(item):
     if item.get("live") and item.get("score"):
         return f"{_hi(home)} vs {_hi(away)} is live at {_hi(item['score'])}."
     clock = f" at {_hi(item['time'])} Africa/Kampala" if item.get("time") else ""
-    return f"{_hi(home)} vs {_hi(away)} is scheduled for {item.get('date')}{clock}."
+    league = f", {_hi(item['league'])}" if item.get("league") else ""
+    venue = f", {_hi(item['venue'])}" if item.get("venue") else ""
+    return f"{_hi(home)} vs {_hi(away)} is scheduled for {item.get('date')}{clock}{league}{venue}."
 
 
 def _sportmonks_live():
@@ -1193,6 +1240,36 @@ def _yesterday_answer(text):
     lines = _as_list([_livescore_line(event) for event in shown])
     extra = f"\n{len(pool) - len(shown)} more finished matches are in the same list." if len(pool) > len(shown) else ""
     return {"text": f"Football results for {day.isoformat()} (Africa/Kampala):\n" + "\n".join(lines) + extra + source}
+
+
+_MAJOR_CLUBS = (
+    "bayern", "real madrid", "barcelona", "manchester city", "manchester united",
+    "liverpool", "arsenal", "chelsea", "tottenham", "juventus", "inter", "milan",
+    "napoli", "paris", "dortmund", "leverkusen", "atletico", "ajax", "benfica", "porto",
+)
+
+
+def _country_ranks():
+    """Official FIFA rank by country name, used to prefer popular national teams."""
+    try:
+        response = requests.get(
+            "https://api.fifa.com/api/v3/fifarankings/rankings/live",
+            params={"language": "en", "count": 50, "gender": 1, "sportType": 0},
+            headers={**_HEADERS, "Accept": "application/json"},
+            timeout=12,
+        )
+        response.raise_for_status()
+        rows = response.json().get("Results") or []
+    except (requests.RequestException, ValueError):
+        return {}
+    ranks = {}
+    for row in rows:
+        name, _points = _ranking_name(row)
+        try:
+            ranks[name.lower()] = int(row.get("Rank"))
+        except (TypeError, ValueError):
+            continue
+    return ranks
 
 
 def _day_answer(text):
