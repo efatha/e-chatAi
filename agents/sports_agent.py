@@ -1791,11 +1791,6 @@ def _catch_up_records(entries, league):
 def _standing_reply(entries, group_name, season, league, country, team_key=None, afcon=False, require_team=True, limit=None):
     group_ids = {str((entry.get("team") or {}).get("id") or "") for entry in entries}
     group_ids.discard("")
-    table_matches = (
-        _finished_table_matches(league, group_ids, group_ids)
-        if len(group_ids) <= 8
-        else _competition_table_matches(league, group_ids)
-    )
     fresh = _catch_up_records(entries, league)
     forms = _table_forms(league, group_ids, afcon)
     rows = []
@@ -1855,20 +1850,9 @@ def _standing_reply(entries, group_name, season, league, country, team_key=None,
             item[4]["rank"] = str(index)
     else:
         rows.sort(key=lambda item: item[0])
-    if not fresh and len(rows) <= 8 and not table_matches:
-        for item in rows:
-            row = item[4]
-            row["form"] = _recent_form(league, row.pop("_id"), group_ids, afcon)
-            row.pop("_fresh", None)
-    elif not fresh and asked and not table_matches:
-        asked["form"] = _recent_form(league, asked.pop("_id"), group_ids, afcon)
-        for item in rows:
-            item[4].pop("_id", None)
-            item[4].pop("_fresh", None)
-    else:
-        for item in rows:
-            item[4].pop("_id", None)
-            item[4].pop("_fresh", None)
+    for item in rows:
+        item[4].pop("_id", None)
+        item[4].pop("_fresh", None)
     if not asked and require_team:
         return None
     place = _ordinal(asked["rank"]) if asked else ""
@@ -1965,24 +1949,49 @@ def _scoreboard_marks(league, team_ids):
 
 
 def _table_forms(league, team_ids, afcon=False):
-    """The last five finished results. A full-time score replaces that match day."""
-    ids = [team_id for team_id in team_ids if team_id]
-    latest = _scoreboard_marks(league, set(ids))
-
-    def one(team_id):
-        dated = _dated_form(league, team_id, team_ids, afcon)
-        if team_id in latest:
-            date, mark = latest[team_id]
-            dated = [item for item in dated if item[0][:10] != date[:10]]
-            dated.append((date, mark))
-        dated.sort(key=lambda item: item[0])
-        return team_id, [mark for _date, mark in dated[-5:]]
-
-    forms = {}
-    with ThreadPoolExecutor(max_workers=min(8, max(len(ids), 1))) as pool:
-        for team_id, marks in pool.map(one, ids):
-            forms[team_id] = marks
-    return forms
+    """Last five full-time results for every club, from the same competition scoreboards."""
+    ids = {team_id for team_id in team_ids if team_id}
+    if not league or not ids:
+        return {}
+    dates = set()
+    today = datetime.now(_KAMPALA).date()
+    for offset in range(4):
+        dates.add((today - timedelta(days=offset)).strftime("%Y%m%d"))
+    sample = list(ids)[:4]
+    with ThreadPoolExecutor(max_workers=min(4, len(sample))) as pool:
+        histories = pool.map(lambda team_id: _dated_form(league, team_id, ids, afcon), sample)
+    for history in histories:
+        for date, _mark in history:
+            if len(date) >= 10:
+                dates.add(date[:10].replace("-", ""))
+    played = {team_id: {} for team_id in ids}
+    urls = [
+        f"https://site.api.espn.com/apis/site/v2/sports/soccer/{league}/scoreboard?dates={stamp}"
+        for stamp in sorted(dates)
+    ]
+    with ThreadPoolExecutor(max_workers=min(8, max(len(urls), 1))) as pool:
+        boards = pool.map(_safe_json, urls)
+    for payload in boards:
+        for event in (payload or {}).get("events") or []:
+            competition = ((event.get("competitions") or [None])[0]) or {}
+            if not _full_time(competition):
+                continue
+            label = f"{event.get('name') or ''} {((event.get('season') or {}).get('displayName')) or ''}"
+            if afcon and (not _afcon_comp(label) or re.search(r"friendly", label, re.IGNORECASE)):
+                continue
+            sides = competition.get("competitors") or []
+            side_ids = {str((side.get("team") or {}).get("id") or "") for side in sides}
+            if not side_ids <= ids:
+                continue
+            day = (event.get("date") or "")[:10]
+            for side in sides:
+                team_id = str((side.get("team") or {}).get("id") or "")
+                if team_id in played and day:
+                    played[team_id][day] = _result_mark(side, sides)
+    return {
+        team_id: [marks[day] for day in sorted(marks)[-5:]]
+        for team_id, marks in played.items()
+    }
 
 
 def _dated_form(league, team_id, group_ids=None, afcon=False):
