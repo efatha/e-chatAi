@@ -1667,8 +1667,7 @@ def _get_json(url):
 
 def _read_table_event(event, team_ids):
     competition = ((event.get("competitions") or [None])[0]) or {}
-    state = (((competition.get("status") or {}).get("type") or {}).get("state")) or ""
-    if state != "post":
+    if not _full_time(competition):
         return None
     parsed = []
     for side in competition.get("competitors") or []:
@@ -1922,24 +1921,71 @@ def _signed(value):
     return str(number)
 
 
+def _full_time(competition):
+    kind = (competition.get("status") or {}).get("type") or {}
+    detail = str(kind.get("shortDetail") or kind.get("detail") or "").upper()
+    return (
+        kind.get("state") == "post"
+        or kind.get("completed") is True
+        or detail in {"FT", "AET", "PEN"}
+        or kind.get("name") in {"STATUS_FULL_TIME", "STATUS_FINAL_AET", "STATUS_FINAL_PEN"}
+    )
+
+
+def _result_mark(side, sides):
+    if side.get("winner") is True:
+        return "W"
+    if any(item.get("winner") is True for item in sides):
+        return "L"
+    return "D"
+
+
+def _scoreboard_marks(league, team_ids):
+    """Full-time results from the last two match days, newest first in the value."""
+    marks = {}
+    today = datetime.now(_KAMPALA).date()
+    for offset in (1, 0):
+        day = today - timedelta(days=offset)
+        payload = _safe_json(
+            f"https://site.api.espn.com/apis/site/v2/sports/soccer/{league}/scoreboard?dates={day.strftime('%Y%m%d')}"
+        )
+        for event in (payload or {}).get("events") or []:
+            competition = ((event.get("competitions") or [None])[0]) or {}
+            if not _full_time(competition):
+                continue
+            sides = competition.get("competitors") or []
+            ids = {str((side.get("team") or {}).get("id") or "") for side in sides}
+            if team_ids and not ids <= set(team_ids):
+                continue
+            for side in sides:
+                team_id = str((side.get("team") or {}).get("id") or "")
+                if team_id in team_ids:
+                    marks[team_id] = (event.get("date") or "", _result_mark(side, sides))
+    return marks
+
+
 def _table_forms(league, team_ids, afcon=False):
-    """The last five finished results for every club, from that club's schedule."""
-    key = ("forms", league, tuple(sorted(team_ids)), bool(afcon))
+    """The last five finished results. A full-time score replaces that match day."""
+    ids = [team_id for team_id in team_ids if team_id]
+    latest = _scoreboard_marks(league, set(ids))
 
-    def load():
-        forms = {}
-        ids = [team_id for team_id in team_ids if team_id]
-        with ThreadPoolExecutor(max_workers=min(8, max(len(ids), 1))) as pool:
-            pairs = pool.map(lambda team_id: (team_id, _recent_form(league, team_id, team_ids, afcon)), ids)
-        for team_id, marks in pairs:
+    def one(team_id):
+        dated = _dated_form(league, team_id, team_ids, afcon)
+        if team_id in latest:
+            date, mark = latest[team_id]
+            dated = [item for item in dated if item[0][:10] != date[:10]]
+            dated.append((date, mark))
+        dated.sort(key=lambda item: item[0])
+        return team_id, [mark for _date, mark in dated[-5:]]
+
+    forms = {}
+    with ThreadPoolExecutor(max_workers=min(8, max(len(ids), 1))) as pool:
+        for team_id, marks in pool.map(one, ids):
             forms[team_id] = marks
-        return forms
-
-    return _cached(key, load)
+    return forms
 
 
-def _recent_form(league, team_id, group_ids=None, afcon=False):
-    """Results in this table only. An AFCON table ignores friendlies."""
+def _dated_form(league, team_id, group_ids=None, afcon=False):
     if not league or not team_id:
         return []
     allowed = {str(item) for item in (group_ids or set()) if item}
@@ -1950,14 +1996,13 @@ def _recent_form(league, team_id, group_ids=None, afcon=False):
             timeout=12,
         )
         response.raise_for_status()
-        events = sorted(response.json().get("events") or [], key=lambda event: event.get("date") or "")
+        events = response.json().get("events") or []
     except (requests.RequestException, ValueError):
         return []
     played = []
     for event in events:
         competition = ((event.get("competitions") or [None])[0]) or {}
-        state = (((competition.get("status") or {}).get("type") or {}).get("state")) or ""
-        if state != "post":
+        if not _full_time(competition):
             continue
         label = f"{event.get('name') or ''} {((event.get('season') or {}).get('displayName')) or ''}"
         if afcon and (not _afcon_comp(label) or re.search(r"friendly", label, re.IGNORECASE)):
@@ -1967,15 +2012,16 @@ def _recent_form(league, team_id, group_ids=None, afcon=False):
         if allowed and not side_ids <= allowed:
             continue
         mine = next((side for side in sides if str((side.get("team") or {}).get("id")) == str(team_id)), None)
-        if not mine:
-            continue
-        if mine.get("winner") is True:
-            played.append("W")
-        elif any(side.get("winner") is True for side in sides):
-            played.append("L")
-        else:
-            played.append("D")
-    return played[-5:]
+        if mine:
+            played.append((event.get("date") or "", _result_mark(mine, sides)))
+    return played
+
+
+def _recent_form(league, team_id, group_ids=None, afcon=False):
+    """Results in this table only. An AFCON table ignores friendlies."""
+    dated = _dated_form(league, team_id, group_ids, afcon)
+    dated.sort(key=lambda item: item[0])
+    return [mark for _date, mark in dated[-5:]]
 
 
 def _stat(entry, key):
