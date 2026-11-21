@@ -1717,6 +1717,9 @@ def _competition_table_matches(league, team_ids):
     def load():
         anchors = list(team_ids)[:4]
         dates = set()
+        today = datetime.now(_KAMPALA).date()
+        for offset in range(10):
+            dates.add((today - timedelta(days=offset)).strftime("%Y%m%d"))
         with ThreadPoolExecutor(max_workers=min(4, max(len(anchors), 1))) as pool:
             schedules = pool.map(lambda team_id: _schedule_events(league, team_id), anchors)
         for events in schedules:
@@ -1794,18 +1797,8 @@ def _standing_reply(entries, group_name, season, league, country, team_key=None,
         if len(group_ids) <= 8
         else _competition_table_matches(league, group_ids)
     )
-    played_form = {team_id: [] for team_id in group_ids}
-    for _date, left, right in table_matches:
-        for side, other in ((left, right), (right, left)):
-            if side[0] not in played_form:
-                continue
-            if side[1] > other[1]:
-                played_form[side[0]].append("W")
-            elif side[1] == other[1]:
-                played_form[side[0]].append("D")
-            else:
-                played_form[side[0]].append("L")
     fresh = _catch_up_records(entries, league)
+    forms = _table_forms(league, group_ids, afcon)
     rows = []
     asked = None
     for entry in entries:
@@ -1849,7 +1842,7 @@ def _standing_reply(entries, group_name, season, league, country, team_key=None,
             "team": label,
             "logo": ((team.get("logos") or [{}])[0].get("href")) or "",
             "cells": cells,
-            "form": (played_form.get(team_id) or (record["form"] if record else []))[-5:],
+            "form": (forms.get(team_id) or [])[-5:],
             "_id": team_id,
             "_fresh": bool(record),
         }
@@ -1927,6 +1920,22 @@ def _signed(value):
     if number > 0:
         return f"+{number}"
     return str(number)
+
+
+def _table_forms(league, team_ids, afcon=False):
+    """The last five finished results for every club, from that club's schedule."""
+    key = ("forms", league, tuple(sorted(team_ids)), bool(afcon))
+
+    def load():
+        forms = {}
+        ids = [team_id for team_id in team_ids if team_id]
+        with ThreadPoolExecutor(max_workers=min(8, max(len(ids), 1))) as pool:
+            pairs = pool.map(lambda team_id: (team_id, _recent_form(league, team_id, team_ids, afcon)), ids)
+        for team_id, marks in pairs:
+            forms[team_id] = marks
+        return forms
+
+    return _cached(key, load)
 
 
 def _recent_form(league, team_id, group_ids=None, afcon=False):
