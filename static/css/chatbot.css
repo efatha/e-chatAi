@@ -563,7 +563,7 @@ body{
 .standings-table th:nth-child(2),
 .standings-table td.club { width: 28%; }
 .standings-table th:last-child,
-.standings-table td.form { width: 78px; }
+.standings-table td.form { width: 96px; min-width: 96px; }
 .club-line span {
   overflow: hidden;
   text-overflow: ellipsis;
