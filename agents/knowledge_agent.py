@@ -3810,17 +3810,59 @@ _GO = r"(?:visited|went to|returned to|came back to|travel(?:led|ed)? to)"
 
 
 def _daily_habit(text):
-    """A usual daily count, read from the main words even when the spelling is loose."""
+    """A usual count for whatever thing the question names, not one fixed word."""
     if re.search(r"\br[ie]n[cs]e", text, re.IGNORECASE) and re.search(r"\b(day|daily)\b", text, re.IGNORECASE):
         return (
             "You can rinse your mouth two or three times a day, usually after meals. "
             "After brushing with fluoride toothpaste, spit the foam out and don't rinse it all away."
         )
-    if re.search(r"\bdogs?\b", text, re.IGNORECASE) and re.search(r"\beat", text, re.IGNORECASE):
+    own = re.search(
+        r"\bhow many times (?:should|can|do|does|did)\s+(?:i|we)\s+(water|feed|brush)\w*\s+(?:a|an|the|my\s+)?(.+?)(?:\s+a\s+(?:day|week|month)|\?|$)",
+        text,
+        re.IGNORECASE,
+    )
+    if own:
+        return _habit_for(own.group(2), own.group(1))
+    asked = re.search(
+        r"\bhow many times (?:does|do|should|can|did)\s+(?:a|an|the|my|your\s+)?(.+?)\s+(eats?|drinks?|sleeps?|waters?|feeds?|brushes?)\b",
+        text,
+        re.IGNORECASE,
+    )
+    if not asked:
+        return None
+    return _habit_for(asked.group(1), asked.group(2))
+
+
+def _habit_for(subject, verb):
+    name = re.sub(r"\s+", " ", (subject or "").strip(" .?"))
+    if not name:
+        return None
+    action = (verb or "").lower()
+    if action.startswith("water"):
+        if re.search(r"\btomato", name, re.IGNORECASE):
+            return _tomato_watering(f"water a {name}")
         return (
-            "An adult dog usually eats twice a day. "
-            "A puppy eats more often, often three or four times a day."
+            f"A {name} usually needs watering about once or twice a week. "
+            "Water more often in hot weather and less often in rainy weather. "
+            "Water when the top of the soil feels dry, in the early morning. "
+            "Keep the soil moist but not waterlogged."
         )
+    if action.startswith("eat") or action.startswith("feed"):
+        if re.search(r"\b(human|person|people|man|woman|child|baby)\b", name, re.IGNORECASE):
+            return (
+                f"A {name} usually eats three times a day: morning, midday, and evening. "
+                "A child eats more often."
+            )
+        return (
+            f"An adult {name} usually eats twice a day. "
+            f"A young {name} eats more often, often three or four times a day."
+        )
+    if action.startswith("drink"):
+        return f"A {name} usually drinks several times a day, more often in hot weather."
+    if action.startswith("sleep"):
+        return f"A {name} usually sleeps once a day, in one main rest."
+    if action.startswith("brush"):
+        return f"Brush a {name} twice a day."
     return None
 
 
