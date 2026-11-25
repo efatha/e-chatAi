@@ -56,6 +56,17 @@ class ConversationMemory:
                 ON messages(conversation_id, id)
                 """
             )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS personal_facts (
+                    username TEXT NOT NULL,
+                    key TEXT NOT NULL,
+                    value TEXT NOT NULL,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (username, key)
+                )
+                """
+            )
 
     def add(self, conversation_id, role, content):
         text = str(content or "").strip()
@@ -99,6 +110,36 @@ class ConversationMemory:
             connection.execute(
                 "DELETE FROM messages WHERE conversation_id = ?",
                 (conversation_id,),
+            )
+
+    def known_fact(self, username, key):
+        """A personal fact saved for this person, across conversations."""
+        if not username or not key:
+            return ""
+        with self._connection() as connection:
+            row = connection.execute(
+                """
+                SELECT value FROM personal_facts
+                WHERE username = ? AND key = ?
+                """,
+                (username.strip().lower(), key.strip().lower()),
+            ).fetchone()
+        return (row["value"] if row else "") or ""
+
+    def remember_fact(self, username, key, value):
+        """Keep a useful personal fact when the user has stated it."""
+        if not username or not key or not value:
+            return
+        with self._connection() as connection:
+            connection.execute(
+                """
+                INSERT INTO personal_facts(username, key, value, updated_at)
+                VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(username, key) DO UPDATE SET
+                    value = excluded.value,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (username.strip().lower(), key.strip().lower(), value.strip()[:200]),
             )
 
     def recall(self, conversation_id, question):

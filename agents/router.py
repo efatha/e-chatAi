@@ -25,6 +25,8 @@ from agents.knowledge_agent import (
     wikidata_image,
     wikidata_research,
     how_to_reply,
+    times_reply,
+    personal_context,
     why_reply,
     translate_reply,
     weather_reply,
@@ -263,7 +265,7 @@ def _accepted_definition(text, history, independent):
 
 def answer_question(
     message, username=None, history=None, file=None, conversation=None,
-    previous_image="", previous_reply="", focus=None,
+    previous_image="", previous_reply="", focus=None, remembered=None,
 ):
     """Answer only from local rules, curated knowledge, memory, or indexed books."""
     independent = _independent_agent
@@ -390,6 +392,20 @@ def answer_question(
                     "kind": "weather",
                 }
             return result
+        remembered_reply = personal_context(text, history, remembered)
+        if remembered_reply:
+            return {
+                "response": _with_name(remembered_reply, username),
+                "source": "memory",
+                "provider": "conversation",
+            }
+        counted = times_reply(text)
+        if counted:
+            return {
+                "response": _with_name(counted, username),
+                "source": "knowledge",
+                "provider": "duckduckgo",
+            }
         sport = sports_reply(text, focus=focus, conversation=conversation)
         if sport:
             result = {

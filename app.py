@@ -25,6 +25,23 @@ with open("data.json", "r", encoding="utf-8") as f:
 configure(DATA.get("trained_knowledge", []), DATA.get("word_meanings", {}))
 memory = ConversationMemory(os.environ.get("MEMORY_DATABASE", "e_chat_memory.sqlite3"))
 
+def _remembered_facts(username, message):
+    """Save a stated favourite club, then return facts this person already permitted in memory."""
+    found = re.search(
+        r"\bmy favou?rite football club is\s+([^.?!,]+)",
+        message or "",
+        re.IGNORECASE,
+    )
+    if username and found:
+        memory.remember_fact(username, "football club", found.group(1))
+    stored = {}
+    if username:
+        club = memory.known_fact(username, "football club")
+        if club:
+            stored["football club"] = club
+    return stored
+
+
 def _index_books():
     book_agent().refresh()
 
@@ -132,6 +149,7 @@ def _chat_turn():
             previous_image=session.get("image_text") or "",
             previous_reply=session.get("image_reply") or "",
             focus=focus,
+            remembered=_remembered_facts(username, message),
         )
         if "image_text" in result:
             session["image_text"] = result.get("image_text") or ""

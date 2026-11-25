@@ -399,6 +399,25 @@ body{
   font-weight: 650;
   line-height: 1.45;
 }
+.advice-list {
+  display: block;
+  margin: 8px 0;
+  padding: 8px 10px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.14);
+  color: #fff;
+}
+.advice-line {
+  display: block;
+  margin: 4px 0;
+  color: #fff;
+  font-weight: 500;
+  line-height: 1.45;
+}
+.advice-line strong {
+  color: #fff;
+  font-weight: 750;
+}
 .tr-note { margin: 10px 0 4px; font-weight: 700; }
 .tr-table { width: 100%; border-collapse: collapse; font-size: 0.86rem; }
 .tr-table th, .tr-table td {

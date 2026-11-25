@@ -409,6 +409,20 @@ const highlightMarks = (html) => String(html || "").replace(
 
 const paintDefinition = (text) => {
   const escaped = escapeHtml(String(text || "")).replace(/\n/g, "<br>");
+  const marks = escaped.match(/(^|<br>)- /g) || [];
+  if (marks.length >= 2) {
+    return escaped.replace(/((?:(?:^|<br>)- [^<]+)+)/g, (block) => {
+      const lines = block.split(/<br>/).filter((line) => line.trim()).map((line) => {
+        const body = line.replace(/^- /, "");
+        const split = body.match(/^([^:]+):\s*(.*)$/);
+        const words = split
+          ? `<strong>${split[1]}:</strong> ${split[2]}`
+          : body;
+        return `<span class="advice-line">- ${words}</span>`;
+      });
+      return `<span class="advice-list">${lines.join("")}</span>`;
+    });
+  }
   return escaped.replace(/(^|<br>|[.!?]\s*)- ([^<]+)/, (all, lead, body) =>
     `${lead}<span class="def-lead">- ${body}</span>`);
 };

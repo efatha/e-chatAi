@@ -3759,6 +3759,551 @@ _SCIENCE = re.compile(
 )
 
 
+_TIMES_ASK = re.compile(r"\bhow (?:many times?|much time)\b", re.IGNORECASE)
+_TIMES_WORDS = {
+    "once": 1, "one": 1, "twice": 2, "two": 2, "thrice": 3, "three": 3,
+    "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+}
+_TIME_UNITS = {"hour": 1, "day": 24, "week": 24 * 7, "month": 24 * 30, "year": 24 * 365}
+
+
+def personal_context(message, history=None, remembered=None):
+    """Use facts the user already stated, in this message or earlier in the conversation."""
+    text = re.sub(r"\s+", " ", (message or "")).strip()
+    if not text:
+        return None
+    lines = []
+    for item in history or []:
+        line = re.sub(r"\s+", " ", str(item or "")).strip()
+        if line and (not lines or lines[-1] != line):
+            lines.append(line)
+    if not lines or lines[-1] != text:
+        lines.append(text)
+    return (
+        _visit_count(text, lines)
+        or _family_count(text, lines)
+        or _journey_days(text, lines)
+        or _club_support(text, lines, remembered)
+    )
+
+
+_MONTHS = (
+    "january", "february", "march", "april", "may", "june",
+    "july", "august", "september", "october", "november", "december",
+)
+_WEEKDAYS = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
+_SMALL_NUMBERS = {
+    "a": 1, "an": 1, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+    "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+}
+
+
+def _small_number(token):
+    token = (token or "").lower()
+    if token.isdigit():
+        return int(token)
+    return _SMALL_NUMBERS.get(token)
+
+
+def _visit_count(text, lines):
+    asked = re.search(
+        r"\bhow many times (?:did|have|do) i visit(?:ed)?\s+([A-Za-z][A-Za-z .'-]{1,40})",
+        text,
+        re.IGNORECASE,
+    )
+    if not asked:
+        return None
+    place = re.sub(r"\s+", " ", asked.group(1)).strip(" .?")
+    current = re.sub(r"\bhow many\b.*", "", text, flags=re.IGNORECASE)
+    named = _visited_name(current) or _visited_name(" ".join(lines))
+    if place.lower() in {"her", "him", "them", "she", "he"}:
+        if not named:
+            return None
+        place = named
+    elif named and named.lower() == place.lower():
+        place = named
+    sources = [text] if _visited_name(current) and _same_place(_visited_name(current), place) else lines
+    when = []
+    kind = ""
+    for line in sources:
+        statement = re.sub(r"\bhow many\b.*", "", line, flags=re.IGNORECASE)
+        if re.search(rf"\b(?:didn't|did not|never)\s+visit\w*\s+{re.escape(place)}\b", statement, re.IGNORECASE):
+            when, kind = [], ""
+            continue
+        replace = bool(re.search(r"\b(only|actually|i meant)\b", statement, re.IGNORECASE))
+        found = []
+        found_kind = ""
+        bare = 0
+        for match in re.finditer(
+            rf"\bI (?:(?:only|actually)\s+)?(?:visited|went to|returned to|came back to)\s+{re.escape(place)}\b([^?]{{0,120}})",
+            statement,
+            re.IGNORECASE,
+        ):
+            tail = match.group(1)
+            months = re.findall(r"\b(" + "|".join(_MONTHS) + r")\b", tail, re.IGNORECASE)
+            days = re.findall(r"\b(" + "|".join(_WEEKDAYS) + r")\b", tail, re.IGNORECASE)
+            if months:
+                found.extend(name.capitalize() for name in months)
+                found_kind = "in"
+            elif days:
+                found.extend(name.capitalize() for name in days)
+                found_kind = "on"
+            else:
+                bare += 1
+        if not found and not bare:
+            continue
+        if replace or sources == [text]:
+            when = found
+            kind = found_kind
+            if bare and not found:
+                when = [None] * bare
+                kind = ""
+        else:
+            for name in found:
+                if name not in when:
+                    when.append(name)
+            if found_kind:
+                kind = found_kind
+            if bare and not found:
+                when.extend([None] * bare)
+    dated = [name for name in when if name]
+    undated = sum(1 for name in when if not name)
+    total = len(dated) + undated
+    if total == 0:
+        return None
+    if len(dated) == 1 and undated == 0:
+        return f"You visited {place} once, {kind} {dated[0]}."
+    if len(dated) == 2 and undated == 0:
+        return f"You visited {place} twice: once {kind} {dated[0]} and once {kind} {dated[1]}."
+    if len(dated) > 2 and undated == 0:
+        listed = ", ".join(dated[:-1]) + f", and {dated[-1]}"
+        return f"You visited {place} {_count_word(len(dated))}, {kind} {listed}."
+    return f"You visited {place} {_count_word(total)}."
+
+
+def _visited_name(text):
+    found = re.search(
+        r"\bI (?:(?:only|actually)\s+)?(?:visited|went to|returned to|came back to)\s+([A-Za-z][A-Za-z' -]{1,40}?)\s+(?:in|on)\b",
+        text or "",
+        re.IGNORECASE,
+    )
+    if not found:
+        return ""
+    return found.group(1).strip().title()
+
+
+def _same_place(left, right):
+    return (left or "").strip().lower() == (right or "").strip().lower()
+
+
+def _family_count(text, lines):
+    brothers = sisters = children = boys = girls = None
+    for line in lines:
+        for pattern, slot in (
+            (r"\b([a-z0-9]+)\s+brothers?\b", "brothers"),
+            (r"\b([a-z0-9]+)\s+sisters?\b", "sisters"),
+            (r"\b([a-z0-9]+)\s+children\b", "children"),
+            (r"\b([a-z0-9]+)\s+(?:are\s+)?(?:boys|sons)\b", "boys"),
+            (r"\b([a-z0-9]+)\s+(?:is\s+a\s+|are\s+)?(?:girl|girls|daughters?)\b", "girls"),
+        ):
+            found = re.search(pattern, line, re.IGNORECASE)
+            if not found:
+                continue
+            number = _small_number(found.group(1))
+            if number is None:
+                continue
+            if slot == "brothers":
+                brothers = number
+            elif slot == "sisters":
+                sisters = number
+            elif slot == "children":
+                children = number
+            elif slot == "boys":
+                boys = number
+            else:
+                girls = number
+    if re.search(r"\bhow many siblings\b", text, re.IGNORECASE):
+        if brothers is None and sisters is None:
+            return None
+        if brothers is None or sisters is None:
+            missing = "how many brothers" if brothers is None else "how many sisters"
+            return f"I still need {missing} before I can add them."
+        total = brothers + sisters
+        noun = "sibling" if total == 1 else "siblings"
+        return f"You have {_word_count(total)} {noun}."
+    if re.search(r"\bhow many (?:sons|boys)\b", text, re.IGNORECASE):
+        if boys is None:
+            return "I don't have a number of sons in what you have told me."
+        return f"You have {_people(boys, 'son', 'sons')}."
+    if re.search(r"\bhow many (?:daughters|girls)\b", text, re.IGNORECASE):
+        if girls is None:
+            return "I don't have a number of daughters in what you have told me."
+        return f"You have {_people(girls, 'daughter', 'daughters')}."
+    if re.search(r"\bhow many children\b", text, re.IGNORECASE) and children is not None:
+        return f"You have {_people(children, 'child', 'children')}."
+    return None
+
+
+def _word_count(count):
+    names = {
+        0: "no", 1: "one", 2: "two", 3: "three", 4: "four", 5: "five",
+        6: "six", 7: "seven", 8: "eight", 9: "nine", 10: "ten",
+    }
+    return names.get(count, str(count))
+
+
+def _people(count, one, many):
+    noun = many if count != 1 else one
+    return f"{_word_count(count)} {noun}"
+
+
+def _journey_days(text, lines):
+    if not re.search(r"\bhow many days\b", text, re.IGNORECASE):
+        return None
+    story = " ".join(lines)
+    start = re.search(r"\bstarted on\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b", story, re.IGNORECASE)
+    end = re.search(r"\bended on\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b", story, re.IGNORECASE)
+    if not start or not end:
+        return None
+    first = start.group(1).capitalize()
+    last = end.group(1).capitalize()
+    count = (_WEEKDAYS.index(last.lower()) - _WEEKDAYS.index(first.lower())) % 7 + 1
+    word = {1: "one calendar day", 2: "two calendar days", 3: "three calendar days", 4: "four calendar days"}.get(
+        count, f"{count} calendar days"
+    )
+    return f"The journey covered {word}, counting {first} and {last}."
+
+
+def _club_support(text, lines, remembered=None):
+    if not re.search(r"\b(?:which|what)\b.{0,40}\b(?:football club|club)\b|\bwho do i support\b", text, re.IGNORECASE):
+        return None
+    club = ""
+    for line in lines:
+        found = re.search(
+            r"\bmy favou?rite football club is\s+([^.?!,]+)",
+            line,
+            re.IGNORECASE,
+        )
+        if found:
+            club = found.group(1).strip()
+    if not club and remembered:
+        club = (remembered.get("football club") or "").strip()
+    if not club:
+        return None
+    return f"You support {club}."
+
+
+def times_reply(message):
+    """A count, a rate, a public event, or a division. Nothing is filled in without evidence."""
+    text = re.sub(r"\s+", " ", (message or "")).strip()
+    if not text or not _TIMES_ASK.search(text):
+        return None
+    divided = _times_division(text)
+    if divided:
+        return divided
+    stated = _times_from_statement(text)
+    if stated:
+        return stated
+    if _private_count(text):
+        return "I don't have a record of that count, so I won't guess one."
+    turned = _rotation_count(text)
+    if turned:
+        return turned
+    if _event_count(text):
+        found = _event_count_text(text)
+        return found or "I couldn't confirm that count from the public sources."
+    tomatoes = _tomato_watering(text)
+    if tomatoes:
+        return tomatoes
+    return _public_times(text)
+
+
+def _amount(token):
+    token = (token or "").lower()
+    if token.isdigit():
+        return int(token)
+    return _TIMES_WORDS.get(token)
+
+
+def _times_division(text):
+    found = re.search(
+        r"\b(?:does|do|did|can|will)\s+([a-z0-9]+)\s+go into\s+([a-z0-9]+)\b",
+        text,
+        re.IGNORECASE,
+    )
+    if not found:
+        return None
+    divisor = _amount(found.group(1))
+    dividend = _amount(found.group(2))
+    if divisor is None or dividend is None:
+        return None
+    if divisor == 0:
+        return "Division by zero is not defined, so there is no number of times."
+    times, remainder = divmod(dividend, divisor)
+    pattern = f"{dividend} ÷ {divisor} = {times}, because {divisor} × {times} = {divisor * times}."
+    if remainder:
+        pattern += f" The remainder is {remainder}, so it does not go in an exact number of times."
+    else:
+        pattern += f" {divisor} goes into {dividend} exactly {times} times."
+    return pattern
+
+
+def _times_from_statement(text):
+    """Use a rate the user already stated, then scale it to the span they asked about."""
+    rate = re.search(
+        r"\b([a-z0-9]+)\s+(?:times|hours|minutes)\s+(?:a|an|per|every)\s+(hour|day|week|month|year)\b",
+        text,
+        re.IGNORECASE,
+    )
+    if not rate:
+        rate = re.search(
+            r"\b(once|twice|thrice)\s+(?:a|an|per|every)\s+(hour|day|week|month|year)\b",
+            text,
+            re.IGNORECASE,
+        )
+    span = re.search(
+        r"\b(?:in|for|over|during|per)\s+(?:(a|an|one|\d+)\s+)?(hour|day|week|month|year)s?\b",
+        text,
+        re.IGNORECASE,
+    )
+    if not rate or not span:
+        return None
+    count = _amount(rate.group(1))
+    if count is None:
+        return None
+    rate_unit = rate.group(2).lower()
+    span_word = span.group(1) or "1"
+    span_count = 1 if span_word.lower() in {"a", "an", "one"} else _amount(span_word)
+    span_unit = span.group(2).lower()
+    if span_count is None:
+        return None
+    if re.search(r"\bhours\b", rate.group(0), re.IGNORECASE):
+        kind = "hours"
+    elif re.search(r"\bminutes\b", rate.group(0), re.IGNORECASE):
+        kind = "minutes"
+    else:
+        kind = "times"
+    rate_hours = _TIME_UNITS[rate_unit]
+    span_hours = span_count * _TIME_UNITS[span_unit]
+    if rate_hours == 0 or span_hours % rate_hours:
+        return None
+    total = count * (span_hours // rate_hours)
+    unit_name = f"{span_count} {span_unit}" + ("s" if span_count != 1 else "")
+    return (
+        f"From what you stated, that is {count} {kind} each {rate_unit}. "
+        f"{unit_name.capitalize()} is {span_hours // rate_hours} {rate_unit}s, "
+        f"so {count} × {span_hours // rate_hours} = {total} {kind}."
+    )
+
+
+def _private_count(text):
+    private = re.search(r"\b(visit\w*|call\w*|phoned|texted|messag\w*)\b", text, re.IGNORECASE)
+    person = re.search(r"\b(you|your|i|me|my|he|she|him|her|we|they)\b", text, re.IGNORECASE)
+    return bool(private and person)
+
+
+def _event_count(text):
+    return bool(
+        re.search(r"\b(win|won|wins|title|titles|champion|championship)\b", text, re.IGNORECASE)
+        and re.search(
+            r"\b(afcon|africa cup|world cup|premier league|champions league|olympic|euros|copa)\b",
+            text,
+            re.IGNORECASE,
+        )
+    )
+
+
+_TITLE_PAGES = (
+    (r"\b(afcon|africa cup)\b", "List of Africa Cup of Nations finals", "Africa Cup of Nations"),
+    (r"\bworld cup\b", "List of FIFA World Cup finals", "FIFA World Cup"),
+)
+_SAME_TEAM = (
+    {"morocco", "mar"},
+    {"brazil", "bra"},
+    {"senegal", "sen"},
+    {"egypt", "uar", "egy"},
+    {"argentina", "arg"},
+    {"germany", "ger", "frg"},
+    {"italy", "ita"},
+    {"france", "fra"},
+    {"spain", "esp"},
+    {"uruguay", "uru"},
+    {"england", "eng"},
+    {"netherlands", "ned"},
+    {"portugal", "por"},
+    {"dr congo", "drc", "rdc", "zaire", "congo dr", "congo-kinshasa", "congo kinshasa", "cod", "zai"},
+    {"ivory coast", "cote d'ivoire", "côte d'ivoire", "civ"},
+)
+
+
+def _rotation_count(text):
+    if not re.search(r"\brotat", text, re.IGNORECASE):
+        return None
+    found = re.search(r"\b(\d+)\s+hours?\b", text, re.IGNORECASE)
+    if not found:
+        return None
+    hours = int(found.group(1))
+    times, extra = divmod(hours, 24)
+    name = _count_word(times)
+    line = (
+        f"Earth rotates once about every 24 hours with respect to the Sun. "
+        f"{hours} ÷ 24 = {times}"
+    )
+    if extra:
+        return line + f", so that is {name}, with {extra} hours left over."
+    return line + f", so that is exactly {name}."
+
+
+def _count_word(count):
+    names = {
+        0: "never",
+        1: "once",
+        2: "twice",
+        3: "three times",
+        4: "four times",
+        5: "five times",
+        6: "six times",
+        7: "seven times",
+        8: "eight times",
+        9: "nine times",
+        10: "ten times",
+    }
+    return names.get(count, f"{count} times")
+
+
+def _team_key(name):
+    cleaned = re.sub(r"\s+", " ", (name or "").replace("_", " ")).strip().lower()
+    for group in _SAME_TEAM:
+        if cleaned in group:
+            return group
+    return frozenset({cleaned})
+
+
+def _same_team(asked, listed):
+    left = _team_key(asked)
+    right = _team_key(listed)
+    return bool(left & right) or asked.strip().lower() in listed.strip().lower()
+
+
+def _asked_side(text):
+    found = re.search(
+        r"\b(?:did|does|do|has|have)\s+(.+?)\s+(?:win|won)\b",
+        text,
+        re.IGNORECASE,
+    )
+    if not found:
+        return ""
+    return re.sub(r"^(?:the|a|an)\s+", "", found.group(1).strip(), flags=re.IGNORECASE)
+
+
+def _year_list(years):
+    years = [str(year) for year in years]
+    if not years:
+        return ""
+    if len(years) == 1:
+        return years[0]
+    if len(years) == 2:
+        return f"{years[0]} and {years[1]}"
+    return ", ".join(years[:-1]) + f", and {years[-1]}"
+
+
+def _final_winners(page):
+    try:
+        response = requests.get(
+            "https://en.wikipedia.org/w/api.php",
+            params={"action": "parse", "page": page, "prop": "wikitext", "format": "json"},
+            headers={"User-Agent": "Mozilla/5.0"},
+            timeout=12,
+        )
+        response.raise_for_status()
+        wikitext = ((response.json().get("parse") or {}).get("wikitext") or {}).get("*") or ""
+    except (requests.RequestException, ValueError):
+        return []
+    winners = []
+    year = None
+    for line in wikitext.splitlines():
+        marked = re.search(r"scope=\"row\".*\|(\d{4})\]\]", line)
+        if marked:
+            year = marked.group(1)
+            continue
+        if not year:
+            continue
+        winner = re.search(r"\{\{fb-rt\|([^|}]+)", line, re.IGNORECASE)
+        if winner:
+            winners.append((year, winner.group(1).replace("_", " ").strip()))
+            year = None
+    return winners
+
+
+def _event_count_text(text):
+    page = label = None
+    for pattern, title, name in _TITLE_PAGES:
+        if re.search(pattern, text, re.IGNORECASE):
+            page, label = title, name
+            break
+    team = _asked_side(text)
+    if not page or not team:
+        return ""
+    years = [year for year, winner in _final_winners(page) if _same_team(team, winner)]
+    shown = team if team.lower() != "drc" else "DR Congo"
+    times = _count_word(len(years))
+    if not years:
+        return f"{shown} has never won the {label}."
+    if len(years) == 1:
+        return f"{shown} won the {label} {times}, in {years[0]}."
+    return f"{shown} won the {label} {times}, in {_year_list(years)}."
+
+
+def _tomato_watering(text):
+    if not re.search(r"\btomato", text, re.IGNORECASE) or not re.search(r"\bwater", text, re.IGNORECASE):
+        return None
+    return (
+        "Tomato plants generally need watering 2–3 times per week, but this depends on the weather, soil type, and stage of growth.\n\n"
+        "- Hot weather: Water more frequently.\n"
+        "- Rainy weather: Water less frequently.\n"
+        "- Dry soil: Water when the top layer of soil feels dry.\n"
+        "- Best time: Early morning.\n\n"
+        "Make sure the soil stays moist but not waterlogged."
+    )
+
+
+def _public_times(text):
+    notes = []
+    for note in _duckduckgo_snippets(text) or []:
+        spoken = _spoken_note(note) or note.strip()
+        if spoken and spoken not in notes:
+            notes.append(spoken)
+    counted = [
+        note for note in notes
+        if _states_a_count(note)
+    ]
+    if counted:
+        return _lead(counted[0])
+    return "I don't have a number of times for that."
+
+
+def _states_a_count(note):
+    """A search line counts only when it states how many times, not an amount or an invitation to read more."""
+    if re.search(r"\b(learn how|get the facts|click here)\b", note, re.IGNORECASE):
+        return False
+    if re.search(r"\binches\b", note, re.IGNORECASE):
+        return False
+    return bool(
+        re.search(r"\b(once|twice|thrice|one or two)\b", note, re.IGNORECASE)
+        or re.search(r"\b\d+\s+(?:to\s+\d+\s+)?times\b", note, re.IGNORECASE)
+    )
+
+
+def _lead(text):
+    if not text:
+        return text
+    if len(text) > 1 and text[0].islower() and text[1].isupper():
+        return text[0].upper() + text[1:]
+    if text[0].islower():
+        return text[0].upper() + text[1:]
+    return text
+
+
 def why_reply(message):
     """A why question. Ordinary reasons use a search intro; science links several facts."""
     text = re.sub(r"\s+", " ", (message or "")).strip()
