@@ -779,6 +779,51 @@ body{
 .commons-photo figcaption a {
   color: inherit;
 }
+.chat-video {
+  margin: 10px 0 0;
+  max-width: 320px;
+}
+.chat-video-poster {
+  position: relative;
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+.chat-video-poster img,
+.chat-video-frame {
+  display: block;
+  width: 100%;
+  height: auto;
+  border: 0;
+  border-radius: 12px;
+}
+.chat-video-frame {
+  background: #111;
+}
+.chat-video-play {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 46px;
+  height: 32px;
+  border-radius: 8px;
+  background: #e11;
+  color: #fff;
+  font-size: 16px;
+  line-height: 32px;
+}
+.chat-video figcaption {
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+.chat-video figcaption a {
+  color: inherit;
+}
 .reply-prose a[href*="wikipedia.org/wiki/"] {
   display: inline-flex;
   align-items: center;

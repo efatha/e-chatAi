@@ -560,12 +560,16 @@ def answer_question(
     if text and not has_file:
         guided = how_to_reply(text)
         if guided:
-            return {
-                "response": _with_name(guided, username),
+            reply = guided["text"] if isinstance(guided, dict) else guided
+            result = {
+                "response": _with_name(reply, username),
                 "source": "knowledge",
-                "provider": "duckduckgo" if "Source:" not in guided else "guide",
+                "provider": "duckduckgo" if "Source:" not in reply else "guide",
                 "focus": {"topic": text, "kind": "howto"},
             }
+            if isinstance(guided, dict) and guided.get("videos"):
+                result["videos"] = guided["videos"]
+            return result
 
     if text and not has_file and looks_like_open_question(text):
         reflected = search_result_text(text)

@@ -152,6 +152,7 @@ _IMAGE_HOSTS = (
     ".wikimedia.org",
     ".content.ces.ncsu.edu",
     ".pexels.com",
+    ".ytimg.com",
 )
 
 

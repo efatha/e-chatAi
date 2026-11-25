@@ -3881,10 +3881,13 @@ def how_to_reply(message):
         extras.append(item)
         if len(extras) == 5:
             break
+    videos = _video_cards(page, found)
+    shown = {item["url"] for item in videos}
+    extras = [item for item in extras if item.get("url") not in shown]
     if extras:
         lines.append("Other guides:")
         lines.extend(f"- [{item['title']}]({item['url']})" for item in extras)
-    return "\n\n".join(lines)
+    return {"text": "\n\n".join(lines), "videos": videos}
 
 
 def _how_sources(goal):
@@ -4279,6 +4282,26 @@ def _page_note(url):
         if note:
             return note
     return ""
+
+
+def _video_cards(page, found):
+    """One unopened YouTube preview for a how-to, when a result is a video."""
+    items = [page] + list(page.get("related") or [])
+    for item in found:
+        if item is not page:
+            items.append(item)
+    seen = set()
+    for item in items:
+        video_id = _youtube_id(item.get("url") or "")
+        if not video_id or video_id in seen:
+            continue
+        return [{
+            "id": video_id,
+            "title": item.get("title") or "YouTube",
+            "url": f"https://www.youtube.com/watch?v={video_id}",
+            "thumbnail": f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg",
+        }]
+    return []
 
 
 def _youtube_id(url):

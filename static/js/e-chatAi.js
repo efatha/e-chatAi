@@ -203,6 +203,48 @@ const renderWeather = (card) => {
   return root;
 };
 
+const renderVideo = (video) => {
+  if (!video || !video.id) return null;
+  const figure = document.createElement("figure");
+  figure.className = "chat-video";
+  const poster = document.createElement("button");
+  poster.type = "button";
+  poster.className = "chat-video-poster";
+  const image = document.createElement("img");
+  image.src = video.thumbnail
+    ? `/chat-image?src=${encodeURIComponent(video.thumbnail)}`
+    : "";
+  image.alt = video.title || "YouTube video";
+  poster.appendChild(image);
+  const play = document.createElement("span");
+  play.className = "chat-video-play";
+  play.setAttribute("aria-hidden", "true");
+  play.textContent = "▶";
+  poster.appendChild(play);
+  poster.addEventListener("click", () => {
+    const frame = document.createElement("iframe");
+    frame.className = "chat-video-frame";
+    frame.src = `https://www.youtube-nocookie.com/embed/${encodeURIComponent(video.id)}?autoplay=1&rel=0&modestbranding=1`;
+    frame.title = video.title || "YouTube video";
+    frame.allow = "accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture";
+    frame.allowFullscreen = true;
+    frame.style.height = `${poster.offsetHeight}px`;
+    poster.replaceWith(frame);
+  });
+  figure.appendChild(poster);
+  const caption = document.createElement("figcaption");
+  caption.appendChild(document.createTextNode(video.title || "YouTube"));
+  caption.appendChild(document.createTextNode(" · "));
+  const link = document.createElement("a");
+  link.href = video.url || `https://www.youtube.com/watch?v=${video.id}`;
+  link.target = "_blank";
+  link.rel = "noopener";
+  link.textContent = "YouTube";
+  caption.appendChild(link);
+  figure.appendChild(caption);
+  return figure;
+};
+
 const renderCommons = (photo) => {
   const figure = document.createElement("figure");
   figure.className = "commons-photo";
@@ -391,6 +433,10 @@ const renderStoredMessage = (item) => {
   const storedPhotos = Array.isArray(item.commons)
     ? item.commons
     : (item.commons ? [item.commons] : []);
+  (item.videos || []).forEach((video) => {
+    const figure = renderVideo(video);
+    if (figure) element.querySelector(".message-text").appendChild(figure);
+  });
   storedPhotos.forEach((photo) => {
     const figure = renderCommons(photo);
     const host = element.querySelector(".message-text");
@@ -447,7 +493,7 @@ const ensureConversation = (firstMessage) => {
   return thread;
 };
 
-const addThreadMessage = (conversationId, role, content, dictionary, weather, commons, translation, sports, portrait) => {
+const addThreadMessage = (conversationId, role, content, dictionary, weather, commons, translation, sports, portrait, videos) => {
   const threads = readThreads();
   const index = threads.findIndex((thread) => thread.id === conversationId);
   if (index < 0) return;
@@ -459,6 +505,7 @@ const addThreadMessage = (conversationId, role, content, dictionary, weather, co
   if (translation) message.translation = translation;
   if (sports) message.sports = sports;
   if (portrait) message.portrait = portrait;
+  if (videos) message.videos = videos;
   threads[index].messages.push(message);
   threads[index].updatedAt = new Date().toISOString();
   const [updated] = threads.splice(index, 1);
@@ -691,6 +738,10 @@ const generateEchatResponse = async (incomingMsgDiv, conversationId, sentMessage
       const photos = Array.isArray(data.commons)
         ? data.commons
         : (data.commons && data.commons.thumbnail ? [data.commons] : []);
+      (data.videos || []).forEach((video) => {
+        const figure = renderVideo(video);
+        if (figure) msgElement.appendChild(figure);
+      });
       photos.forEach((photo) => {
         const figure = renderCommons(photo);
         if (photo.place === "top") msgElement.prepend(figure);
@@ -739,7 +790,7 @@ const generateEchatResponse = async (incomingMsgDiv, conversationId, sentMessage
         }
       }
       finishMessage(incomingMsgDiv);
-      addThreadMessage(conversationId, "assistant", data.response, data.dictionary, data.weather, data.commons, data.translation, data.sports, data.portrait);
+      addThreadMessage(conversationId, "assistant", data.response, data.dictionary, data.weather, data.commons, data.translation, data.sports, data.portrait, data.videos);
       return;
     }
     throw new Error(data.error || "Backend returned no answer.");
