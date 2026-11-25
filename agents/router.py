@@ -805,7 +805,11 @@ def _definition_from_local_or_wikipedia(text, independent, username):
         if photos:
             result["commons"] = photos
     else:
-        photo = wikidata_image(found["term"]) or commons_image(found["term"])
+        photo = (
+            wikidata_image(found["term"])
+            or commons_image(found["term"])
+            or commons_image(found["term"].replace("-", " "))
+        )
         if photo:
             result["commons"] = photo
     return result

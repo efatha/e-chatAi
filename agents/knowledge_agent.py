@@ -2218,6 +2218,9 @@ def _linked_opening(modifier, noun, adjective_text, person):
 
 def _described_definition(modifier, noun):
     phrase = f"{modifier} {noun}"
+    article = _compound_article(phrase)
+    if article:
+        return article
     noun_page = _wikipedia_plain_summary(noun)
     adj_page = _wikipedia_plain_summary(modifier)
     noun_mean = (
@@ -2247,14 +2250,70 @@ def _described_definition(modifier, noun):
         f"{noun}: {noun_mean}" if noun_mean else "",
         f"{modifier}: {adj_mean}" if adj_mean else "",
     ]
-    notes = _duckduckgo_snippets(f"what is a {phrase}")
-    paragraph = re.sub(r"\s+", " ", notes[0] if notes else "").strip()
-    paragraph = re.sub(r"\bHow to use .+ in a sentence\.?", "", paragraph, flags=re.I).strip()
-    if len(paragraph) > 420:
-        paragraph = paragraph[:420].rsplit(" ", 1)[0].rstrip(" ,;") + "."
-    if paragraph:
-        parts.append(paragraph)
     return "\n\n".join(part for part in parts if part)
+
+
+def _plain_title(value):
+    return re.sub(r"[^a-z0-9]+", "", (value or "").lower())
+
+
+def _wiki_page(title):
+    """(article title, intro) when Wikipedia has that page."""
+    try:
+        response = requests.get(
+            "https://en.wikipedia.org/api/rest_v1/page/summary/"
+            + requests.utils.quote(title.replace(" ", "_")),
+            headers={"User-Agent": WIKI_USER_AGENT, "Accept": "application/json"},
+            timeout=16,
+        )
+        if response.status_code == 404:
+            return None
+        response.raise_for_status()
+        payload = response.json() or {}
+    except (requests.RequestException, ValueError):
+        return None
+    if payload.get("type") == "disambiguation":
+        return None
+    extract = re.sub(r"\s+", " ", payload.get("extract") or "").strip()
+    if len(extract) < 40:
+        return None
+    return payload.get("title") or title, extract
+
+
+def _compound_article(phrase):
+    """Wikipedia when the article is the whole phrase, otherwise the phrase's own dictionary entry."""
+    page = _wiki_page(phrase)
+    if page:
+        title, extract = page
+        words = [word for word in re.findall(r"[A-Za-z0-9']+", phrase.lower()) if word not in {"a", "an", "the"}]
+        title_words = set(re.findall(r"[A-Za-z0-9']+", title.lower()))
+        if _plain_title(title) == _plain_title(phrase) or all(word in title_words for word in words):
+            return extract
+    gloss = _wiktionary_phrase(phrase)
+    if gloss:
+        return gloss
+    return ""
+
+
+def _wiktionary_phrase(phrase):
+    try:
+        response = requests.get(
+            "https://en.wiktionary.org/api/rest_v1/page/definition/" + requests.utils.quote(phrase),
+            headers={"User-Agent": WIKI_USER_AGENT},
+            timeout=12,
+        )
+        if not response.ok:
+            return ""
+        senses = ((response.json() or {}).get("en") or [{}])[0].get("definitions") or []
+    except (requests.RequestException, ValueError):
+        return ""
+    if not senses:
+        return ""
+    gloss = re.sub(r"<[^>]+>", "", senses[0].get("definition") or "")
+    gloss = re.sub(r"\s+", " ", html.unescape(gloss)).strip(" .")
+    if len(gloss) < 12:
+        return ""
+    return f"A {phrase} is {gloss[0].lower() + gloss[1:]}."
 
 
 def wikipedia_definition(term, question=""):
@@ -2269,6 +2328,10 @@ def wikipedia_definition(term, question=""):
         return None
     if subject.lower() in {"ai", "a.i.", "a.i"}:
         subject = "Artificial intelligence"
+    if "-" in subject and " " not in subject:
+        joined = _wiki_page(subject) or _wiki_page(subject.replace("-", " ")) or _wiki_page(subject.replace("-", ""))
+        if joined and not _is_disambiguation(joined[1]):
+            return joined[1]
     direct = _resolved_summary(subject)
     if not direct:
         head = re.sub(
