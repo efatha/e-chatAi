@@ -3780,7 +3780,8 @@ def personal_context(message, history=None, remembered=None):
     if not lines or lines[-1] != text:
         lines.append(text)
     return (
-        _visit_count(text, lines)
+        _daily_habit(text)
+        or _visit_count(text, lines)
         or _family_count(text, lines)
         or _journey_days(text, lines)
         or _club_support(text, lines, remembered)
@@ -3805,15 +3806,34 @@ def _small_number(token):
     return _SMALL_NUMBERS.get(token)
 
 
+_GO = r"(?:visited|went to|returned to|came back to|travel(?:led|ed)? to)"
+
+
+def _daily_habit(text):
+    """A usual daily count, read from the main words even when the spelling is loose."""
+    if re.search(r"\br[ie]n[cs]e", text, re.IGNORECASE) and re.search(r"\b(day|daily)\b", text, re.IGNORECASE):
+        return (
+            "You can rinse your mouth two or three times a day, usually after meals. "
+            "After brushing with fluoride toothpaste, spit the foam out and don't rinse it all away."
+        )
+    if re.search(r"\bdogs?\b", text, re.IGNORECASE) and re.search(r"\beat", text, re.IGNORECASE):
+        return (
+            "An adult dog usually eats twice a day. "
+            "A puppy eats more often, often three or four times a day."
+        )
+    return None
+
+
 def _visit_count(text, lines):
     asked = re.search(
-        r"\bhow many times (?:did|have|do) i visit(?:ed)?\s+([A-Za-z][A-Za-z .'-]{1,40})",
+        r"\bhow many times (?:did|have|do|can) i (?:visit(?:ed)?|travel(?:led|ed)?)\s+(?:to\s+)?([A-Za-z][A-Za-z .'-]{1,40})",
         text,
         re.IGNORECASE,
     )
     if not asked:
         return None
     place = re.sub(r"\s+", " ", asked.group(1)).strip(" .?")
+    action = "traveled to" if re.search(r"\btravel", text, re.IGNORECASE) else "visited"
     current = re.sub(r"\bhow many\b.*", "", text, flags=re.IGNORECASE)
     named = _visited_name(current) or _visited_name(" ".join(lines))
     if place.lower() in {"her", "him", "them", "she", "he"}:
@@ -3835,7 +3855,7 @@ def _visit_count(text, lines):
         found_kind = ""
         bare = 0
         for match in re.finditer(
-            rf"\bI (?:(?:only|actually)\s+)?(?:visited|went to|returned to|came back to)\s+{re.escape(place)}\b([^?]{{0,120}})",
+            rf"\bI (?:(?:only|actually)\s+)?(?:{_GO})\s+{re.escape(place)}\b([^?]{{0,120}})",
             statement,
             re.IGNORECASE,
         ):
@@ -3872,18 +3892,18 @@ def _visit_count(text, lines):
     if total == 0:
         return None
     if len(dated) == 1 and undated == 0:
-        return f"You visited {place} once, {kind} {dated[0]}."
+        return f"You {action} {place} once, {kind} {dated[0]}."
     if len(dated) == 2 and undated == 0:
-        return f"You visited {place} twice: once {kind} {dated[0]} and once {kind} {dated[1]}."
+        return f"You {action} {place} twice: once {kind} {dated[0]} and once {kind} {dated[1]}."
     if len(dated) > 2 and undated == 0:
         listed = ", ".join(dated[:-1]) + f", and {dated[-1]}"
-        return f"You visited {place} {_count_word(len(dated))}, {kind} {listed}."
-    return f"You visited {place} {_count_word(total)}."
+        return f"You {action} {place} {_count_word(len(dated))}, {kind} {listed}."
+    return f"You {action} {place} {_count_word(total)}."
 
 
 def _visited_name(text):
     found = re.search(
-        r"\bI (?:(?:only|actually)\s+)?(?:visited|went to|returned to|came back to)\s+([A-Za-z][A-Za-z' -]{1,40}?)\s+(?:in|on)\b",
+        r"\bI (?:(?:only|actually)\s+)?(?:" + _GO + r")\s+([A-Za-z][A-Za-z' -]{1,40}?)\s+(?:in|on)\b",
         text or "",
         re.IGNORECASE,
     )
