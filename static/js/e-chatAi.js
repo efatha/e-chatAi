@@ -11,14 +11,18 @@ const eFile = document.querySelector("#e-file");
 const fileUploadWrapper = document.querySelector(".file-upload-wrapper");
 const memoryLinks = document.querySelector("#memory-links");
 const memorySearch = document.querySelector("#memory-search-input");
+const memoryCount = document.querySelector("#memory-count");
 const newConversationButton = document.querySelector("#new-conversation");
 const memoryToggle = document.querySelector("#memory-toggle");
+const memorySide = document.querySelector("#memory-side");
 const appShell = document.querySelector(".app-shell");
 const chatWelcome = document.querySelector("#chat-welcome");
 const THREADS_KEY = "eChatConversationThreads";
 const OLD_MEMORY_KEY = "eChatConversationMemory";
 const ACTIVE_KEY = "eChatActiveConversation";
+const SIDE_KEY = "eChatMemorySide";
 let activeConversationId = null;
+let memoryFilter = "recent";
 
 const userData = {
   message: null,
@@ -58,20 +62,58 @@ const setWelcomeVisible = (visible) => {
   chatWelcome.hidden = !visible;
 };
 
+const phoneLayout = () => window.matchMedia("(max-width: 678px)").matches;
+
 const toggleMemory = () => {
   const isOpen = appShell.classList.toggle("memory-open");
   memoryToggle.setAttribute("aria-expanded", String(isOpen));
   memoryToggle.setAttribute("aria-label", isOpen ? "Close memory" : "Open memory");
 };
 
+const closeMemoryOnPhone = () => {
+  if (!phoneLayout() || !appShell.classList.contains("memory-open")) return;
+  appShell.classList.remove("memory-open");
+  memoryToggle.setAttribute("aria-expanded", "false");
+  memoryToggle.setAttribute("aria-label", "Open memory");
+};
+
+const memoryPreview = (thread) => {
+  const messages = Array.isArray(thread.messages) ? thread.messages : [];
+  const last = [...messages].reverse().find((item) => item && item.content);
+  const text = String((last && last.content) || "").replace(/\s+/g, " ").trim();
+  if (!text || text === thread.title) return "";
+  return text.length > 78 ? `${text.slice(0, 78).trim()}…` : text;
+};
+
+const closeMemoryMenus = () => {
+  memoryLinks.querySelectorAll(".memory-menu").forEach((menu) => menu.remove());
+  memoryLinks.querySelectorAll(".menu-open").forEach((row) => row.classList.remove("menu-open"));
+};
+
 const renderMemoryLinks = (filter = "") => {
   const query = filter.trim().toLowerCase();
-  const threads = readThreads().filter((thread) =>
-    !query || String(thread.title || "").toLowerCase().includes(query)
-  );
+  const saved = readThreads();
+  const threads = saved.filter((thread) => {
+    const title = String(thread.title || "").toLowerCase();
+    const preview = memoryPreview(thread).toLowerCase();
+    const matchesQuery = !query || title.includes(query) || preview.includes(query);
+    const matchesPin = memoryFilter !== "pinned" || thread.pinned;
+    return matchesQuery && matchesPin;
+  });
+  if (memoryCount) {
+    const count = saved.length;
+    memoryCount.textContent = count === 1 ? "1 chat" : `${count} chats`;
+  }
   memoryLinks.innerHTML = "";
   if (!threads.length) {
-    memoryLinks.innerHTML = '<p class="memory-empty">No saved conversations yet. Start chatting and the topic will appear here.</p>';
+    const empty = document.createElement("p");
+    empty.className = "memory-empty";
+    empty.textContent = query
+      ? "No memory matches that search."
+      : memoryFilter === "pinned"
+        ? "No pinned chats yet. Open the menu on a chat and choose Pin."
+        : "No saved chats yet. Ask something, and it will appear here.";
+    memoryLinks.appendChild(empty);
     return;
   }
   threads.forEach((thread) => {
@@ -81,27 +123,72 @@ const renderMemoryLinks = (filter = "") => {
     const link = document.createElement("button");
     link.type = "button";
     link.className = "memory-link";
-    link.textContent = thread.title || "Conversation";
-    link.title = thread.title || "Conversation";
+    const mark = document.createElement("span");
+    mark.className = "memory-mark";
+    mark.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M8 3h8a2 2 0 0 1 2 2v16l-6-3-6 3V5a2 2 0 0 1 2-2z"/></svg>';
+    const copy = document.createElement("span");
+    copy.className = "memory-copy";
+    const title = document.createElement("span");
+    title.className = "memory-title";
+    title.textContent = thread.title || "Conversation";
+    link.appendChild(title);
+    const previewText = memoryPreview(thread);
+    if (previewText) {
+      const preview = document.createElement("span");
+      preview.className = "memory-preview";
+      preview.textContent = previewText;
+      link.appendChild(preview);
+    }
+    copy.append(title);
+    if (previewText) copy.append(link.querySelector(".memory-preview"));
+    link.append(mark, copy);
     link.addEventListener("click", () => openConversation(thread.id));
 
-    const rename = document.createElement("button");
-    rename.type = "button";
-    rename.className = "memory-action";
-    rename.textContent = "Edit";
-    rename.setAttribute("aria-label", `Rename ${thread.title || "conversation"}`);
-    rename.addEventListener("click", () => beginRename(row, thread.id));
+    const more = document.createElement("button");
+    more.type = "button";
+    more.className = "memory-more";
+    more.textContent = "⋯";
+    more.setAttribute("aria-label", `Actions for ${thread.title || "conversation"}`);
+    more.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const open = row.classList.contains("menu-open");
+      closeMemoryMenus();
+      if (open) return;
+      row.classList.add("menu-open");
+      const menu = document.createElement("div");
+      menu.className = "memory-menu";
+      const pin = document.createElement("button");
+      pin.type = "button";
+      pin.textContent = thread.pinned ? "Unpin" : "Pin";
+      pin.addEventListener("click", () => togglePin(thread.id));
+      const rename = document.createElement("button");
+      rename.type = "button";
+      rename.textContent = "Edit";
+      rename.addEventListener("click", () => {
+        closeMemoryMenus();
+        beginRename(row, thread.id);
+      });
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "memory-delete";
+      remove.textContent = "Delete";
+      remove.addEventListener("click", () => deleteConversation(thread.id, thread.title));
+      menu.append(pin, rename, remove);
+      row.appendChild(menu);
+    });
 
-    const remove = document.createElement("button");
-    remove.type = "button";
-    remove.className = "memory-action memory-delete";
-    remove.textContent = "Delete";
-    remove.setAttribute("aria-label", `Delete ${thread.title || "conversation"}`);
-    remove.addEventListener("click", () => deleteConversation(thread.id));
-
-    row.append(link, rename, remove);
+    row.append(link, more);
     memoryLinks.appendChild(row);
   });
+};
+
+const togglePin = (conversationId) => {
+  const threads = readThreads();
+  const thread = threads.find((item) => item.id === conversationId);
+  if (!thread) return;
+  thread.pinned = !thread.pinned;
+  saveThreads(threads);
+  renderMemoryLinks(memorySearch.value);
 };
 
 const updateThreadTitle = (conversationId, title) => {
@@ -146,7 +233,9 @@ const beginRename = (row, conversationId) => {
   input.select();
 };
 
-const deleteConversation = (conversationId) => {
+const deleteConversation = (conversationId, title) => {
+  const name = title || "this chat";
+  if (!window.confirm(`Remove “${name}” from memory on this device?`)) return;
   const threads = readThreads().filter((thread) => thread.id !== conversationId);
   saveThreads(threads);
   if (activeConversationId === conversationId) {
@@ -477,6 +566,7 @@ const openConversation = (conversationId) => {
   (thread.messages || []).forEach(renderStoredMessage);
   renderMemoryLinks(memorySearch.value);
   eChatBody.scrollTo({ top: eChatBody.scrollHeight });
+  closeMemoryOnPhone();
 };
 
 const startNewConversation = () => {
@@ -485,6 +575,7 @@ const startNewConversation = () => {
   clearChatPanel();
   setWelcomeVisible(true);
   renderMemoryLinks(memorySearch.value);
+  closeMemoryOnPhone();
   msgInput.focus();
 };
 
@@ -868,8 +959,30 @@ msgInput.addEventListener("keydown", (e) => {
 
 sendMsgBtn.addEventListener("click", handleOutgoingMsg);
 newConversationButton.addEventListener("click", startNewConversation);
+document.querySelector("#memory-close").addEventListener("click", closeMemoryOnPhone);
 memoryToggle.addEventListener("click", toggleMemory);
 memorySearch.addEventListener("input", () => renderMemoryLinks(memorySearch.value));
+document.querySelectorAll(".memory-filter").forEach((button) => {
+  button.addEventListener("click", () => {
+    memoryFilter = button.dataset.memoryFilter || "recent";
+    document.querySelectorAll(".memory-filter").forEach((item) => {
+      item.classList.toggle("is-on", item === button);
+    });
+    renderMemoryLinks(memorySearch.value);
+  });
+});
+if (localStorage.getItem(SIDE_KEY) === "right") {
+  appShell.classList.add("memory-right");
+  memorySide.textContent = "Move left";
+}
+memorySide.addEventListener("click", () => {
+  const onRight = appShell.classList.toggle("memory-right");
+  localStorage.setItem(SIDE_KEY, onRight ? "right" : "left");
+  memorySide.textContent = onRight ? "Move left" : "Move right";
+});
+document.addEventListener("click", (event) => {
+  if (!event.target.closest(".memory-row")) closeMemoryMenus();
+});
 document.querySelector("#e-file-upload").addEventListener("click", () => eFile.click());
 
 eFile.addEventListener("change", () => {

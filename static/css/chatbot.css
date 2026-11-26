@@ -52,12 +52,12 @@ body{
 }
 .memory-sidebar{
     display: none;
-    width: 270px;
+    width: 320px;
     height: 570px;
     flex-direction: column;
-    padding: 18px 12px 12px;
-    color: var(--efa-gray-800);
-    background: rgba(248, 249, 250, 0.96);
+    padding: 20px 16px 14px;
+    color: #1c2428;
+    background: rgba(248, 249, 250, 0.98);
     border: 1px solid rgba(57, 125, 146, 0.18);
     border-radius: 15px;
     box-shadow: 0 18px 45px rgba(33, 37, 41, 0.16);
@@ -65,14 +65,20 @@ body{
 .app-shell.memory-open .memory-sidebar{
     display: flex;
 }
+.app-shell.memory-right{
+    flex-direction: row-reverse;
+}
 .memory-heading{
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     justify-content: space-between;
-    padding: 2px 6px 14px;
+    gap: 12px;
+    padding: 0 2px 8px;
 }
 .memory-heading h2{
-    font-size: 1.35rem;
+    margin: 0;
+    font-size: 1.4rem;
+    color: inherit;
 }
 .memory-eyebrow{
     color: var(--efa-sea);
@@ -81,19 +87,83 @@ body{
     letter-spacing: 0.12em;
     text-transform: uppercase;
 }
+.memory-count{
+    margin: 2px 0 0;
+    color: inherit;
+    opacity: 0.72;
+    font-size: 0.78rem;
+}
+#memory-close{
+    display: none;
+}
 #new-conversation{
-    width: 36px;
+    flex: 0 0 auto;
     height: 36px;
+    padding: 0 12px;
     border: 0;
     border-radius: 10px;
-    color: white;
-    background: var(--efa-sea);
-    font-size: 1.55rem;
+    color: var(--efa-white);
+    background: var(--memory-accent, var(--efa-sea));
+    font: inherit;
+    font-size: 0.86rem;
+    font-weight: 700;
     cursor: pointer;
 }
 #new-conversation:hover{
     transform: translateY(-1px);
-    background: var(--efa-Blue);
+    filter: brightness(1.08);
+}
+.memory-note{
+    margin: 0 2px 12px;
+    color: #3d4c53;
+    font-size: 0.78rem;
+    line-height: 1.45;
+}
+.memory-search{
+    padding-bottom: 10px;
+}
+.memory-search label{
+    display: block;
+    margin: 0 2px 6px;
+    color: inherit;
+    opacity: 0.72;
+    font-size: 0.72rem;
+    font-weight: 700;
+    text-transform: uppercase;
+}
+#memory-search-input{
+    width: 100%;
+    border: 1px solid var(--efa-gray-600);
+    border-radius: 9px;
+    outline: none;
+    padding: 10px 11px;
+    color: inherit;
+    background: var(--memory-field, white);
+}
+#memory-search-input:focus{
+    border-color: var(--efa-sea);
+    box-shadow: 0 0 0 3px rgba(57, 125, 146, 0.12);
+}
+.memory-filters{
+    display: flex;
+    gap: 6px;
+    padding-bottom: 10px;
+}
+.memory-filters button{
+    border: 1px solid var(--efa-gray-600);
+    border-radius: 999px;
+    padding: 5px 10px;
+    color: inherit;
+    background: var(--memory-field, white);
+    font: inherit;
+    font-size: 0.75rem;
+    font-weight: 700;
+    cursor: pointer;
+}
+.memory-filters button.is-on{
+    color: var(--efa-white);
+    background: var(--memory-accent, var(--efa-sea));
+    border-color: transparent;
 }
 .memory-links{
     flex: 1;
@@ -101,14 +171,16 @@ body{
     overflow-y: auto;
     display: flex;
     flex-direction: column;
-    gap: 5px;
+    gap: 8px;
     padding: 2px;
 }
 .memory-row{
+    position: relative;
     display: flex;
-    align-items: center;
-    gap: 2px;
-    border-radius: 9px;
+    align-items: flex-start;
+    gap: 4px;
+    border-radius: 12px;
+    padding: 4px 4px 4px 0;
 }
 .memory-row:hover,
 .memory-row.active{
@@ -117,75 +189,119 @@ body{
 .memory-link{
     flex: 1;
     min-width: 0;
+    display: flex;
+    flex-direction: row;
+    align-items: flex-start;
+    gap: 10px;
     border: 0;
-    border-radius: 9px;
-    padding: 10px 8px 10px 11px;
-    overflow: hidden;
-    color: var(--efa-gray-800);
+    border-radius: 12px;
+    padding: 12px 8px 12px 14px;
+    color: inherit;
     background: transparent;
     text-align: left;
-    text-overflow: ellipsis;
-    white-space: nowrap;
     cursor: pointer;
 }
-.memory-action{
+.memory-mark{
     flex: 0 0 auto;
-    border: 0;
-    border-radius: 7px;
-    padding: 4px 6px;
-    color: var(--efa-gray-600);
-    background: transparent;
-    font-size: 0.68rem;
+    width: 28px;
+    height: 28px;
+    margin-top: 1px;
+    color: var(--memory-mark, var(--efa-sea));
+}
+.memory-mark svg{
+    width: 28px;
+    height: 28px;
+    display: block;
+}
+.memory-copy{
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+.memory-title{
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
     font-weight: 700;
+    line-height: 1.35;
+}
+.memory-preview{
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    color: inherit;
+    opacity: 0.72;
+    font-size: 0.78rem;
+    line-height: 1.35;
+}
+.memory-more{
+    flex: 0 0 auto;
+    width: 32px;
+    height: 32px;
+    margin-top: 8px;
+    border: 0;
+    border-radius: 8px;
+    color: inherit;
+    background: transparent;
+    font-size: 1.2rem;
+    line-height: 1;
     cursor: pointer;
 }
-.memory-action:hover{
-    color: var(--efa-sea);
-    background: rgba(255, 255, 255, 0.7);
+.memory-more:hover,
+.memory-row.menu-open .memory-more{
+    background: rgba(255, 255, 255, 0.8);
 }
-.memory-delete:hover{
+.memory-menu{
+    position: absolute;
+    top: 40px;
+    right: 8px;
+    z-index: 3;
+    display: flex;
+    flex-direction: column;
+    min-width: 132px;
+    padding: 6px;
+    border-radius: 10px;
+    background: var(--memory-menu, white);
+    color: inherit;
+    box-shadow: 0 10px 28px rgba(20, 32, 38, 0.18);
+}
+.memory-menu button{
+    border: 0;
+    border-radius: 8px;
+    padding: 8px 10px;
+    color: inherit;
+    background: transparent;
+    font: inherit;
+    font-size: 0.84rem;
+    text-align: left;
+    cursor: pointer;
+}
+.memory-menu button:hover{
+    background: rgba(57, 125, 146, 0.12);
+}
+.memory-menu .memory-delete{
     color: #9b3b4a;
 }
 .memory-rename{
     flex: 1;
     min-width: 0;
-    margin: 6px 4px 6px 8px;
-    padding: 6px 8px;
+    margin: 10px 8px 10px 12px;
+    padding: 8px 10px;
     border: 1px solid var(--efa-sea);
     border-radius: 8px;
-    color: var(--efa-gray-800);
-    background: white;
+    color: inherit;
+    background: var(--memory-field, white);
     font: inherit;
 }
 .memory-empty{
-    padding: 18px 10px;
-    color: var(--efa-gray-600);
-    font-size: 0.86rem;
-    line-height: 1.45;
-}
-.memory-search{
-    padding-top: 12px;
-    border-top: 1px solid var(--efa-gray-300);
-}
-.memory-search label{
-    display: block;
-    margin: 0 4px 6px;
-    color: var(--efa-gray-600);
-    font-size: 0.72rem;
-    font-weight: 700;
-    text-transform: uppercase;
-}
-#memory-search-input{
-    width: 100%;
-    border: 1px solid var(--efa-gray-300);
-    border-radius: 9px;
-    outline: none;
-    padding: 10px 11px;
-    background: white;
-}
-#memory-search-input:focus{
-    border-color: var(--efa-sea);
-    box-shadow: 0 0 0 3px rgba(57, 125, 146, 0.12);
+    padding: 22px 12px;
+    color: inherit;
+    opacity: 0.8;
+    font-size: 0.9rem;
+    line-height: 1.5;
 }
 .pre-header{
     display: flex;
@@ -1460,15 +1576,59 @@ form.is-recording #message-input {
    min-height: 0;
  }
  .memory-sidebar{
-   width: 100%;
-   height: 205px;
+   position: fixed;
+   z-index: 30;
+   top: 0;
+   bottom: 0;
+   left: 0;
+   display: flex;
+   width: min(100%, 340px);
+   height: auto;
+   border-radius: 0 16px 16px 0;
+   transform: translateX(-110%);
+   pointer-events: none;
+ }
+ .app-shell.memory-open .memory-sidebar{
+   transform: none;
+   pointer-events: auto;
+ }
+ .app-shell.memory-right .memory-sidebar{
+   left: auto;
+   right: 0;
+   border-radius: 16px 0 0 16px;
+   transform: translateX(110%);
+ }
+ .app-shell.memory-right.memory-open .memory-sidebar{
+   transform: none;
+ }
+ .app-shell.memory-open article{
+   filter: blur(7px);
+   pointer-events: none;
+ }
+ .memory-heading{
+   align-items: center;
+ }
+ #memory-close{
+   display: grid;
+   place-items: center;
+   width: 36px;
+   height: 36px;
+   margin-left: auto;
+   border: 0;
+   border-radius: 10px;
+   color: inherit;
+   background: var(--memory-field, white);
+   font-size: 1.4rem;
+   line-height: 1;
+   cursor: pointer;
  }
  .memory-links{
-   flex-direction: row;
-   overflow-x: auto;
+   flex-direction: column;
+   overflow-x: hidden;
+   overflow-y: auto;
  }
  .memory-row{
-   min-width: 220px;
+   min-width: 0;
  }
  article{
   flex: 1;
