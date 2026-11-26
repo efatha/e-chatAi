@@ -23,19 +23,21 @@ if (!SpeechRecognition) {
   startRecordBtn.setAttribute('aria-label', 'Voice input not supported on this browser.');
 } else {
   const recognition = new SpeechRecognition();
-  recognition.lang = 'en-US';
+  recognition.lang = navigator.language || 'en-US';
   recognition.continuous = true;
   recognition.interimResults = true;
   recognition.maxAlternatives = 1;
-  let onDevice = typeof recognition.processLocally === 'boolean';
-  if (onDevice) recognition.processLocally = true;
+  let route = 'cloud';
+  if (typeof recognition.processLocally === 'boolean') recognition.processLocally = false;
 
   let committed = '';
   let sessionFinal = '';
   let sessionInterim = '';
+  let cloudTries = 0;
   let listening = false;
   let stopRequested = false;
   let delivered = false;
+  let recognitionGaveUp = false;
   let audioContext = null;
   let analyser = null;
   let sourceNode = null;
@@ -207,13 +209,15 @@ if (!SpeechRecognition) {
     }
     stopRequested = false;
     delivered = false;
+    recognitionGaveUp = false;
+    cloudTries = 0;
+    route = 'cloud';
+    if (typeof recognition.processLocally === 'boolean') recognition.processLocally = false;
     committed = messageInput.value.trim();
     sessionFinal = '';
     sessionInterim = '';
     history.length = 0;
     setListening(true);
-    ensureAudio();
-    startLevels();
     try {
       recognition.start();
     } catch (error) {
@@ -241,18 +245,20 @@ if (!SpeechRecognition) {
 
   recognition.onresult = (event) => {
     if (delivered) return;
-    sessionFinal = '';
-    sessionInterim = '';
-    for (let i = 0; i < event.results.length; i += 1) {
-      const transcript = event.results[i][0].transcript;
-      if (event.results[i].isFinal) sessionFinal += `${transcript} `;
-      else sessionInterim += transcript;
+    let interimText = '';
+    const start = Number.isInteger(event.resultIndex) ? event.resultIndex : 0;
+    for (let i = start; i < event.results.length; i += 1) {
+      const heard = event.results[i][0] && event.results[i][0].transcript;
+      if (!heard) continue;
+      if (event.results[i].isFinal) sessionFinal += `${heard} `;
+      else interimText += heard;
     }
+    sessionInterim = interimText;
     renderTranscript();
   };
 
   const resume = () => {
-    if (stopRequested || delivered || !listening) return;
+    if (stopRequested || delivered || recognitionGaveUp || !listening) return;
     try {
       recognition.start();
     } catch (error) {
@@ -271,10 +277,23 @@ if (!SpeechRecognition) {
 
   recognition.onerror = (event) => {
     if (event.error === 'no-speech' || event.error === 'aborted') return;
-    if (onDevice && (event.error === 'language-not-supported' || event.error === 'service-not-allowed')) {
-      onDevice = false;
+    const canSwitch = event.error === 'network' || event.error === 'service-not-allowed' || event.error === 'language-not-supported';
+    if (event.error === 'network' && route === 'cloud' && cloudTries < 2) {
+      cloudTries += 1;
+      return;
+    }
+    if (canSwitch && route === 'cloud' && typeof recognition.processLocally === 'boolean') {
+      route = 'local';
+      recognition.processLocally = true;
+      return;
+    }
+    if (canSwitch && route === 'local') {
+      route = 'done';
       recognition.processLocally = false;
-      resume();
+      return;
+    }
+    if (canSwitch) {
+      recognitionGaveUp = true;
       return;
     }
     console.error('Speech recognition error:', event.error);
