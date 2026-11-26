@@ -16,6 +16,8 @@ updateBody();
 
 function updateBody() {
     const memory = document.querySelector(".memory-sidebar");
+    const welcomeTitle = document.querySelector(".chat-welcome h1");
+    const welcomeCopy = document.querySelector(".chat-welcome p");
     if (inputTheme.checked) {
         body.style.background = "var(--efa-background2)"; // Dark mode background color
         eChatB.style.background = "var(--efa-gray-800)";
@@ -30,6 +32,8 @@ function updateBody() {
             memory.style.setProperty("--memory-field", "var(--efa-gray-900)");
             memory.style.setProperty("--memory-accent", "var(--efa-gray-900)");
         }
+        if (welcomeTitle) welcomeTitle.style.color = "var(--efa-gray-100)";
+        if (welcomeCopy) welcomeCopy.style.color = "var(--efa-gray-400)";
     } else {
         body.style.background = "var(--efa-background)"; // Light mode background color
         eChatB.style.background = "var(--efa-gray-200)";
@@ -44,6 +48,8 @@ function updateBody() {
             memory.style.setProperty("--memory-field", "var(--efa-white)");
             memory.style.setProperty("--memory-accent", "var(--efa-sea)");
         }
+        if (welcomeTitle) welcomeTitle.style.color = "var(--efa-gray-900)";
+        if (welcomeCopy) welcomeCopy.style.color = "var(--efa-gray-600)";
     }
 }
 
